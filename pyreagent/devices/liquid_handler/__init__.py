@@ -3,6 +3,7 @@ Drivers implement ``LiquidHandlerBackend``; deck, tip and volume bookkeeping liv
 
 Brands:
     simulated/   records every motion; use it to dry-run agent plans
+    opentrons/   Opentrons OT-2 and Flex (HTTP API)
 """
 
 from .backend import LiquidHandlerBackend

@@ -23,16 +23,14 @@ def payload(result) -> dict:
 async def test_tools_are_generated(hub: DeviceHub):
     async with Client(build_mcp_server(hub)) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
-    assert {"list_devices", "get_job", "get_confirmation", "reserve_device"} <= set(tools)
-    assert "approve_confirmation" not in tools  # approvals are for humans only
+    assert {"list_devices", "get_job", "cancel_job", "reserve_device"} <= set(tools)
     weigh = tools["balance-1__weigh"]
     assert weigh.annotations.read_only_hint is True
     assert "timeout_s" in weigh.input_schema["properties"]
     dispense = tools["pump-1__dispense"]
     assert dispense.annotations.destructive_hint is True
-    assert "confirmation_id" in dispense.input_schema["properties"]
-    assert "Long-running" in dispense.description and "human approval" in dispense.description
-    assert "confirmation_id" not in tools["balance-1__weigh"].input_schema["properties"]
+    assert "idempotency_key" in dispense.input_schema["properties"]
+    assert "Long-running" in dispense.description
 
 
 async def test_agent_flow_over_mcp(hub: DeviceHub):
@@ -43,18 +41,7 @@ async def test_agent_flow_over_mcp(hub: DeviceHub):
         result = await client.call_tool("balance-1__tare", {})
         assert not result.is_error and payload(result)["status"] == "completed"
 
-        args = {"volume_ml": 1.0, "rate_ml_min": 10.0}
-        gated = await client.call_tool("pump-1__dispense", args)
-        assert gated.is_error
-        error = payload(gated)["error"]
-        assert error["code"] == "confirmation_required"
-        cid = error["details"]["confirmation_id"]
-
-        hub.decide_confirmation(cid, approve=True, operator="alice")  # the human, outside MCP
-        status = payload(await client.call_tool("get_confirmation", {"confirmation_id": cid}))
-        assert status["status"] == "approved"
-
-        accepted = payload(await client.call_tool("pump-1__dispense", {**args, "confirmation_id": cid}))
+        accepted = payload(await client.call_tool("pump-1__dispense", {"volume_ml": 1.0, "rate_ml_min": 10.0}))
         assert accepted["status"] == "accepted"
         job = payload(await client.call_tool("get_job", {"job_id": accepted["job"]["id"], "wait_s": 5}))
         assert job["status"] == "succeeded"

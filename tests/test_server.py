@@ -29,7 +29,7 @@ def test_discovery(client: TestClient):
     assert pump["state"] == "idle" and pump["simulated"] is True
     assert pump["limits"]["max_volume_ml"] == 10
     dispense = next(c for c in pump["capabilities"] if c["name"] == "dispense")
-    assert dispense["long_running"] and dispense["requires_confirmation"]
+    assert dispense["long_running"] and not dispense["read_only"]
     assert "volume_ml" in dispense["parameters"]["properties"]
     assert client.get("/health").json()["devices"]["pump-1"] == "idle"
 
@@ -38,9 +38,9 @@ def test_openapi_is_generated_from_capabilities(client: TestClient):
     spec = client.get("/openapi.json").json()
     op = spec["paths"]["/devices/pump-1/dispense"]["post"]
     assert op["operationId"] == "pump-1__dispense"
-    assert "Requires human confirmation" in op["description"]
+    assert "Long-running" in op["description"]
     headers = {p["name"] for p in op["parameters"]}
-    assert {"X-Caller", "Idempotency-Key", "X-Confirmation-Id"} <= headers
+    assert {"X-Caller", "Idempotency-Key"} <= headers
     assert "/devices/balance-1/weigh" in spec["paths"]
 
 
@@ -59,22 +59,13 @@ def test_call_and_structured_errors(client: TestClient):
     assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"
 
 
-def test_gated_long_running_flow_over_http(client: TestClient):
+def test_long_running_flow_over_http(client: TestClient):
     args = {"volume_ml": 2.0, "rate_ml_min": 10.0}
-    r = client.post("/devices/pump-1/dispense", json=args, headers=AGENT)
-    assert r.status_code == 428
-    cid = r.json()["error"]["details"]["confirmation_id"]
-    assert [c["id"] for c in client.get("/confirmations").json()["confirmations"]] == [cid]
-
-    assert client.post(f"/confirmations/{cid}/approve", headers={"X-Caller": "alice"}).status_code == 403  # no token
-    r = client.post(f"/confirmations/{cid}/approve", json={"reason": "checked tubing"}, headers=HUMAN)
-    assert r.status_code == 200 and r.json()["status"] == "approved" and r.json()["decided_by"] == "alice"
-
-    r = client.post("/devices/pump-1/dispense", json=args, headers={**AGENT, "X-Confirmation-Id": cid, "Idempotency-Key": "k1"})
+    r = client.post("/devices/pump-1/dispense", json=args, headers={**AGENT, "Idempotency-Key": "k1"})
     assert r.status_code == 202
     job_id = r.json()["job"]["id"]
     # A retry with the same key returns the same job instead of dispensing again.
-    again = client.post("/devices/pump-1/dispense", json=args, headers={**AGENT, "X-Confirmation-Id": cid, "Idempotency-Key": "k1"})
+    again = client.post("/devices/pump-1/dispense", json=args, headers={**AGENT, "Idempotency-Key": "k1"})
     assert again.status_code == 202 and again.json()["job"]["id"] == job_id
 
     job = client.get(f"/jobs/{job_id}", params={"wait_s": 5}).json()
@@ -82,7 +73,8 @@ def test_gated_long_running_flow_over_http(client: TestClient):
     assert job["result"]["moved_ml"] == pytest.approx(2.0)
 
     audit = client.get("/audit", params={"device": "pump-1"}).json()["records"]
-    assert {"confirmation_requested", "confirmation_approved", "invoke", "job_finished"} <= {r["event"] for r in audit}
+    assert {"invoke", "job_finished"} <= {r["event"] for r in audit}
+    assert client.get("/confirmations").status_code == 404
 
 
 def test_reservation_endpoints(client: TestClient):

@@ -1,6 +1,6 @@
 # Example device server for a bench with real instruments.
 #   pyreagent serve examples/bench.toml
-# Set PYREAGENT_OPERATOR_TOKEN in the environment so only humans can approve gated actions.
+# Set PYREAGENT_OPERATOR_TOKEN to protect the connect/disconnect and force-release endpoints.
 
 [server]
 name = "bench-1"
@@ -32,11 +32,57 @@ driver = "new_era"                            # pyreagent/devices/pump/new_era/
 # Inside diameter from your syringe maker's table; it sets the volume calibration.
 driver_options = { port = "COM4", syringe_diameter_mm = 14.43, address = 0 }
 options = { max_volume_ml = 10.0, min_rate_ml_min = 0.001, max_rate_ml_min = 20.0 }
-# Every dispense/withdraw needs human approval by default. Once a protocol is
-# validated you can relax that here; the override shows in GET /devices.
-# confirm = { dispense = false, withdraw = false }
 
 [[devices]]
 name = "reader-1"
 type = "plate_reader"
 driver = "simulated"                          # until a real plate reader driver exists
+
+# --- Opentrons OT-2 with a Thermocycler and a Temperature Module -----------------------
+# The pipettes and the modules are separate devices, but they share the robot's run:
+# give them the same host and robot. Declare labware by Opentrons load name.
+[[devices]]
+name = "ot2-1"
+type = "liquid_handler"
+driver = "opentrons"                          # pyreagent/devices/liquid_handler/opentrons/
+driver_options = { host = "192.168.1.50", robot = "ot2" }   # host = "auto" finds it via mDNS (pip install 'pyreagent[opentrons]')
+# driver_options = { host = "192.168.1.50", robot = "ot2", labware_definitions = ["labware/lab_24_tuberack.json"] }
+
+[devices.options.deck]
+"1" = "opentrons_96_tiprack_300ul"
+"2" = "opentrons_96_tiprack_20ul"
+"3" = { labware = "nest_12_reservoir_15ml", initial_volume_ul = 12000 }
+"4" = { labware = "corning_96_wellplate_360ul_flat", initial_volume_ul = 0 }
+"7" = { labware = "opentrons_96_wellplate_200ul_pcr_full_skirt", initial_volume_ul = 0 }   # on the thermocycler
+
+[[devices]]
+name = "ot2-tc"
+type = "thermocycler"
+driver = "opentrons"                          # pyreagent/devices/thermocycler/opentrons/robot.py
+driver_options = { host = "192.168.1.50", robot = "ot2", block_max_volume_ul = 25 }   # sits in slots 7/8/10/11
+
+[[devices]]
+name = "ot2-temp"
+type = "temperature_controller"
+driver = "opentrons"                          # pyreagent/devices/temperature_controller/opentrons/robot.py
+driver_options = { host = "192.168.1.50", robot = "ot2", slot = "3" }
+options = { min_c = 4, max_c = 95 }
+
+# --- An Opentrons module on USB, without a robot ----------------------------------------
+# [[devices]]
+# name = "bench-tc"
+# type = "thermocycler"
+# driver = "opentrons.usb:OpentronsThermocyclerUSBBackend"
+# driver_options = { port = "COM7", block_max_volume_ul = 50 }
+
+# --- Opentrons Flex ---------------------------------------------------------------------------
+# Slots, trash bins, staging slots (A4-D4) and the waste chute come from the robot's deck configuration.
+# [[devices]]
+# name = "flex-1"
+# type = "liquid_handler"
+# driver = "opentrons"
+# driver_options = { host = "192.168.1.60", robot = "flex" }
+# [devices.options.deck]
+# "B1" = "opentrons_flex_96_tiprack_200ul"
+# "C1" = { labware = "nest_12_reservoir_15ml", initial_volume_ul = 12000 }
+# "D1" = { labware = "nest_96_wellplate_2ml_deep", initial_volume_ul = 0 }

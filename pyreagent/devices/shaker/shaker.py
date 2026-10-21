@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -21,9 +21,9 @@ class Shaker(Device[ShakerBackend]):
     device_type = "shaker"
 
     def __init__(
-        self, name: str, backend: ShakerBackend, *, min_rpm: float, max_rpm: float, confirm: Mapping[str, bool] | None = None
+        self, name: str, backend: ShakerBackend, *, min_rpm: float, max_rpm: float
     ) -> None:
-        super().__init__(name, backend, confirm=confirm)
+        super().__init__(name, backend)
         self.min_rpm = min_rpm
         self.max_rpm = max_rpm
 

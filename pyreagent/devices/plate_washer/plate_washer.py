@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -28,9 +28,9 @@ class PlateWasher(Device[PlateWasherBackend]):
     device_type = "plate_washer"
 
     def __init__(
-        self, name: str, backend: PlateWasherBackend, *, labware: LabwareCatalog | None = None, confirm: Mapping[str, bool] | None = None
+        self, name: str, backend: PlateWasherBackend, *, labware: LabwareCatalog | None = None
     ) -> None:
-        super().__init__(name, backend, confirm=confirm)
+        super().__init__(name, backend)
         self.labware = labware or DEFAULT_CATALOG
 
     def limits(self) -> dict[str, Any]:
@@ -66,11 +66,7 @@ class PlateWasher(Device[PlateWasherBackend]):
             raise NeedsAttention(f"Buffer {buffer} has {have:g} mL; this run needs about {needed_ml:g} mL.",
                                  suggested_action=f"Ask a human to refill buffer bottle {buffer}, then retry.")
 
-    @capability(
-        long_running=True,
-        requires_confirmation=True,
-        hazard="Aspirates (removes) the liquid in every selected well, then refills with buffer. The well contents are discarded.",
-    )
+    @capability(long_running=True)
     async def wash(
         self,
         plate: Plate,
@@ -93,7 +89,7 @@ class PlateWasher(Device[PlateWasherBackend]):
         return WasherRun(operation="wash", plate=plate, buffer=buffer, columns=cols, cycles=cycles,
                          buffer_used_ml=round(needed_ml, 3), duration_s=round(loop.time() - started, 3))
 
-    @capability(long_running=True, requires_confirmation=True, hazard="Dispenses buffer into every selected well.")
+    @capability(long_running=True)
     async def dispense(self, plate: Plate, buffer: Buffer, volume_ul: DispenseUl, columns: Columns = None) -> WasherRun:
         """Dispense buffer into wells without aspirating first (e.g. to add blocking buffer). Runs as a job."""
         labware = self._plate(plate)
@@ -106,7 +102,7 @@ class PlateWasher(Device[PlateWasherBackend]):
         return WasherRun(operation="dispense", plate=plate, buffer=buffer, columns=cols, cycles=1,
                          buffer_used_ml=round(needed_ml, 3), duration_s=round(loop.time() - started, 3))
 
-    @capability(long_running=True, requires_confirmation=True, hazard="Pumps buffer through the lines into the priming trough; the trough must be in place.")
+    @capability(long_running=True)
     async def prime(
         self, buffer: Buffer, volume_ml: Annotated[float, Field(gt=0, le=500, description="Buffer to push through, mL.")] = 50
     ) -> WasherRun:

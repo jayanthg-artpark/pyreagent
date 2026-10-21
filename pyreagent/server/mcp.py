@@ -1,9 +1,8 @@
 """MCP tools generated from the same capability definitions as the HTTP API.
 
 Every device capability becomes a tool named ``<device>__<capability>``, plus a
-few built-in tools for discovery, jobs, confirmations and reservations. Tools
-call ``DeviceHub.invoke``, so MCP callers get exactly the HTTP API's checks.
-Approving confirmations is deliberately *not* a tool: that is for humans.
+few built-in tools for discovery, jobs and reservations. Tools call
+``DeviceHub.invoke``, so MCP callers get exactly the HTTP API's checks.
 """
 
 from __future__ import annotations
@@ -34,12 +33,10 @@ You control laboratory instruments through this server. Rules:
 2. Respect limits; the server enforces them and rejects anything outside them with code invalid_argument.
 3. Long-running tools return status "accepted" with a job. Poll get_job(job_id, wait_s=10) until the job's status is
    succeeded, failed or cancelled. Do not re-issue the command while its job is running.
-4. If a call fails with code confirmation_required, tell the human what the action is and its hazard, poll
-   get_confirmation until it is approved, then repeat the identical call with confirmation_id set. Never guess approval.
-5. Every error has recoverable and suggested_action. Retry only when recoverable is true; otherwise follow
+4. Every error has recoverable and suggested_action. Retry only when recoverable is true; otherwise follow
    suggested_action or stop and ask the human.
-6. For a multi-step sequence on one device, call reserve_device first and release_device after.
-7. Pass a fresh idempotency_key on actions you might retry; a retry with the same key returns the original outcome.
+5. For a multi-step sequence on one device, call reserve_device first and release_device after.
+6. Pass a fresh idempotency_key on actions you might retry; a retry with the same key returns the original outcome.
 """
 
 
@@ -71,10 +68,6 @@ class _ListJobsArgs(_Args):
     limit: int = Field(default=20, ge=1, le=200)
 
 
-class _ConfirmationArgs(_Args):
-    confirmation_id: str = Field(description="Id from a confirmation_required error.")
-
-
 class _ReserveArgs(_DeviceArgs):
     ttl_s: float = Field(default=300, ge=1, le=3600, description="Reservation lifetime; call again to extend.")
 
@@ -93,7 +86,6 @@ def _compact_device(hub: DeviceHub, name: str) -> dict[str, Any]:
                 "tool": f"{name}__{c['name']}",
                 "summary": c["summary"],
                 "long_running": c["long_running"],
-                "requires_confirmation": c["requires_confirmation"],
                 "read_only": c["read_only"],
             }
             for c in full["capabilities"]
@@ -117,9 +109,6 @@ def _builtin_tools(hub: DeviceHub) -> list[tuple[str, str, type[_Args], Callable
     async def cancel_job(a: _JobArgs, caller: str) -> Any:
         return (await hub.jobs.cancel(a.job_id)).model_dump(mode="json")
 
-    async def get_confirmation(a: _ConfirmationArgs, caller: str) -> Any:
-        return hub.confirmations.get(a.confirmation_id).model_dump(mode="json")
-
     async def reserve_device(a: _ReserveArgs, caller: str) -> Any:
         return hub.reserve(a.device, caller=caller, ttl_s=a.ttl_s).to_dict()
 
@@ -139,7 +128,6 @@ def _builtin_tools(hub: DeviceHub) -> list[tuple[str, str, type[_Args], Callable
         ("get_job", "Status, progress and result of a job. Use wait_s to long-poll instead of calling in a tight loop.", _JobArgs, get_job, True),
         ("list_jobs", "Recent jobs, newest first.", _ListJobsArgs, list_jobs, True),
         ("cancel_job", "Cancel a running job. The device is told to stop what it was doing.", _JobArgs, cancel_job, False),
-        ("get_confirmation", "Check whether a human has approved or rejected a gated action.", _ConfirmationArgs, get_confirmation, True),
         ("reserve_device", "Reserve a device so other callers cannot send it mutating commands until you release it or the reservation expires.", _ReserveArgs, reserve_device, False),
         ("release_device", "Release a reservation you hold.", _DeviceArgs, release_device, False),
         ("list_labware", "Labware ids the server knows (plates etc.), with their geometry.", _NoArgs, list_labware, True),
@@ -152,13 +140,6 @@ def _capability_description(device: Device[Any], spec: CapabilitySpec) -> str:
     notes = [f"Device: {device.name} ({device.device_type}{', simulated' if device.backend.simulated else ''})."]
     if meta.long_running:
         notes.append("Long-running: returns status 'accepted' with a job; poll get_job until it finishes.")
-    if device.requires_confirmation(spec.name):
-        notes.append(
-            "Needs human approval on every call"
-            + (f" ({meta.hazard})" if meta.hazard else "")
-            + ". The first call fails with confirmation_required and a confirmation_id; after a human approves, "
-            "repeat the identical call with confirmation_id."
-        )
     if meta.read_only:
         notes.append("Read-only: allowed at any time.")
     if meta.interrupt:
@@ -173,11 +154,6 @@ def _capability_schema(device: Device[Any], spec: CapabilitySpec) -> dict[str, A
         "type": "string",
         "description": "Optional. Reuse the same key when retrying this exact action to avoid doing it twice.",
     }
-    if device.requires_confirmation(spec.name):
-        properties["confirmation_id"] = {
-            "type": "string",
-            "description": "Id of an approved confirmation for this exact call (from a confirmation_required error).",
-        }
     schema["properties"] = properties
     schema.setdefault("type", "object")
     return schema
@@ -208,14 +184,12 @@ def build_tools(hub: DeviceHub) -> dict[str, ToolEntry]:
 
             async def invoke(args: dict[str, Any], caller: str, _device: str = device.name, _cap: str = spec.name) -> Any:
                 args = dict(args)
-                confirmation_id = args.pop("confirmation_id", None)
                 idempotency_key = args.pop("idempotency_key", None)
                 invocation = await hub.invoke(
-                    _device, _cap, args, caller=caller, confirmation_id=confirmation_id, idempotency_key=idempotency_key
+                    _device, _cap, args, caller=caller, idempotency_key=idempotency_key
                 )
                 return invocation.model_dump(mode="json")
 
-            gated = device.requires_confirmation(spec.name)
             entries[tool_name] = ToolEntry(
                 tool=types.Tool(
                     name=tool_name,
@@ -224,7 +198,7 @@ def build_tools(hub: DeviceHub) -> dict[str, ToolEntry]:
                     input_schema=_capability_schema(device, spec),
                     annotations=types.ToolAnnotations(
                         read_only_hint=spec.meta.read_only,
-                        destructive_hint=gated,
+                        destructive_hint=not spec.meta.read_only,
                         idempotent_hint=spec.meta.read_only,
                         open_world_hint=False,
                     ),

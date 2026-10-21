@@ -93,17 +93,6 @@ class DeviceFault(PyreagentError):
     http_status = 409
 
 
-class ConfirmationRequired(PyreagentError):
-    code = "confirmation_required"
-    recoverable = True
-    suggested_action = (
-        "A human must approve this action. Show them the hazard, wait until "
-        "GET /confirmations/{confirmation_id} reports 'approved', then repeat the exact "
-        "same call with confirmation_id set."
-    )
-    http_status = 428
-
-
 class Forbidden(PyreagentError):
     code = "forbidden"
     recoverable = False

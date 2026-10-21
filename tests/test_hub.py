@@ -6,16 +6,13 @@ import asyncio
 
 import pytest
 
-from conftest import approve_and_call
 from pyreagent.core import (
-    ConfirmationRequired,
     DeviceBusy,
     DeviceFault,
     DeviceHub,
     DeviceOffline,
     DeviceReserved,
     DeviceState,
-    Forbidden,
     InvalidArgument,
     NeedsAttention,
     NotFound,
@@ -66,65 +63,11 @@ async def test_server_side_limits(hub: DeviceHub):
         await hub.invoke("heater-1", "set_temperature", {"target_c": 300})
     with pytest.raises(InvalidArgument):  # schema allows >= 200 nm, this reader only >= 230 nm
         await hub.invoke("reader-1", "read_absorbance", {"plate": "generic_96_wellplate", "wavelength_nm": 210})
-    # All refused before any human was asked to approve them.
-    assert hub.confirmations.list() == []
-
-
-async def test_confirmation_flow(hub: DeviceHub):
-    args = {"volume_ml": 1.0, "rate_ml_min": 10.0}
-    with pytest.raises(ConfirmationRequired) as first:
-        await hub.invoke("pump-1", "dispense", args, caller="agent")
-    cid = first.value.details["confirmation_id"]
-    assert first.value.recoverable
-    # Asking again does not pile up confirmations.
-    with pytest.raises(ConfirmationRequired) as again:
-        await hub.invoke("pump-1", "dispense", args, caller="agent")
-    assert again.value.details["confirmation_id"] == cid
-    # Still pending -> still blocked.
-    with pytest.raises(ConfirmationRequired):
-        await hub.invoke("pump-1", "dispense", args, caller="agent", confirmation_id=cid)
-    # An agent cannot approve its own request.
-    with pytest.raises(Forbidden):
-        hub.decide_confirmation(cid, approve=True, operator="agent")
-    hub.decide_confirmation(cid, approve=True, operator="human")
-    # The approval is bound to the exact arguments.
-    with pytest.raises(InvalidArgument):
-        await hub.invoke("pump-1", "dispense", {"volume_ml": 9.0, "rate_ml_min": 10.0}, caller="agent", confirmation_id=cid)
-    accepted = await hub.invoke("pump-1", "dispense", args, caller="agent", confirmation_id=cid)
-    assert (await hub.jobs.wait(accepted.job.id, 5)).status == "succeeded"
-    # Single use.
-    with pytest.raises(InvalidArgument):
-        await hub.invoke("pump-1", "dispense", args, caller="agent", confirmation_id=cid)
-    events = [r.event for r in hub.audit.query(device="pump-1")]
-    assert "confirmation_requested" in events and "confirmation_approved" in events
-
-
-async def test_rejected_confirmation_is_final(hub: DeviceHub):
-    with pytest.raises(ConfirmationRequired) as err:
-        await hub.invoke("heater-1", "set_temperature", {"target_c": 60}, caller="agent")
-    cid = err.value.details["confirmation_id"]
-    hub.decide_confirmation(cid, approve=False, operator="human", reason="sample is heat sensitive")
-    with pytest.raises(InvalidArgument) as rejected:
-        await hub.invoke("heater-1", "set_temperature", {"target_c": 60}, caller="agent", confirmation_id=cid)
-    assert "heat sensitive" in rejected.value.message
-    assert not rejected.value.recoverable
-
-
-async def test_confirmation_override_per_instance():
-    pump = Pump("trusted-pump", SimulatedPumpBackend(speedup=600), max_volume_ml=10, max_rate_ml_min=20,
-                poll_interval_s=0.01, confirm={"dispense": False})
-    hub = DeviceHub([pump])
-    await hub.start()
-    accepted = await hub.invoke("trusted-pump", "dispense", {"volume_ml": 1, "rate_ml_min": 10})
-    assert (await hub.jobs.wait(accepted.job.id, 5)).status == "succeeded"
-    assert pump.describe()["capabilities"][0]["name"] == "dispense"
-    assert pump.describe()["capabilities"][0]["requires_confirmation"] is False
-    await hub.stop()
 
 
 async def test_mutex_busy_reads_and_interrupts(slow_hub: DeviceHub):
     hub = slow_hub
-    accepted = await approve_and_call(hub, "pump-1", "dispense", {"volume_ml": 5, "rate_ml_min": 1})
+    accepted = await hub.invoke("pump-1", "dispense", {"volume_ml": 5, "rate_ml_min": 1})
     pump = hub.device("pump-1")
     assert pump.state is DeviceState.BUSY  # claimed before invoke returned
     # A second mutating command fails fast and says which job to wait for.
@@ -146,7 +89,7 @@ async def test_mutex_busy_reads_and_interrupts(slow_hub: DeviceHub):
 
 async def test_cancel_job_stops_the_hardware(slow_hub: DeviceHub):
     hub = slow_hub
-    accepted = await approve_and_call(hub, "pump-1", "dispense", {"volume_ml": 5, "rate_ml_min": 1})
+    accepted = await hub.invoke("pump-1", "dispense", {"volume_ml": 5, "rate_ml_min": 1})
     await asyncio.sleep(0.05)
     job = await hub.jobs.cancel(accepted.job.id)
     assert job.status == "cancelled"
@@ -191,7 +134,7 @@ async def test_idempotency_key(hub: DeviceHub):
 async def test_hardware_fault_locks_device_until_reset(hub: DeviceHub):
     pump = hub.device("pump-1")
     pump.backend.alarm = "motor stalled"
-    accepted = await approve_and_call(hub, "pump-1", "dispense", {"volume_ml": 1, "rate_ml_min": 10})
+    accepted = await hub.invoke("pump-1", "dispense", {"volume_ml": 1, "rate_ml_min": 10})
     job = await hub.jobs.wait(accepted.job.id, 5)
     assert job.status == "failed" and job.error["code"] == "hardware_error"
     assert pump.state is DeviceState.ERROR
@@ -199,7 +142,7 @@ async def test_hardware_fault_locks_device_until_reset(hub: DeviceHub):
         await hub.invoke("pump-1", "dispense", {"volume_ml": 1, "rate_ml_min": 10}, caller="agent")
     assert (await hub.invoke("pump-1", "status")).status == "completed"  # reads still allowed
     pump.backend.alarm = None
-    await approve_and_call(hub, "pump-1", "reset", {})
+    await hub.invoke("pump-1", "reset", {})
     assert pump.state is DeviceState.IDLE
     assert hub.describe_device("pump-1")["last_error"] is None
 
@@ -220,7 +163,7 @@ async def test_unreachable_device_is_offline_not_fatal():
 
 
 async def test_temperature_wait_and_progress(hub: DeviceHub):
-    await approve_and_call(hub, "heater-1", "set_temperature", {"target_c": 37})
+    await hub.invoke("heater-1", "set_temperature", {"target_c": 37})
     accepted = await hub.invoke("heater-1", "wait_for_temperature", {"tolerance_c": 0.5, "timeout_s": 10})
     job = await hub.jobs.wait(accepted.job.id, 10)
     assert job.status == "succeeded", job.error
@@ -230,7 +173,7 @@ async def test_temperature_wait_and_progress(hub: DeviceHub):
 
 
 async def test_plate_reader_needs_closed_tray(hub: DeviceHub):
-    await approve_and_call(hub, "reader-1", "open_tray", {})
+    await hub.invoke("reader-1", "open_tray", {})
     with pytest.raises(NeedsAttention) as err:
         await hub.invoke("reader-1", "read_absorbance", {"plate": "generic_96_wellplate", "wavelength_nm": 600})
     assert err.value.recoverable

@@ -119,3 +119,87 @@ class FakeNE1000:
         else:
             return self._frame("?")
         return self._frame()
+
+
+class FakeThermocyclerFirmware:
+    """Answers Opentrons Thermocycler G-codes over USB, as GEN1 or GEN2 firmware."""
+
+    def __init__(self, *, generation: int = 2) -> None:
+        self.generation = generation
+        self.block_target: float | None = None
+        self.block = 23.0
+        self.lid_target: float | None = None
+        self.lid = 23.0
+        self.lid_open = False
+        self.plate_lifted = False
+        self.commands: list[str] = []
+
+    def _reply(self, gcode: str, body: str = "") -> bytes:
+        if self.generation == 2:
+            return f"{gcode} {body} OK\n".replace("  ", " ").encode("ascii")
+        return f"{body}\r\nok\r\nok\r\n".encode("ascii")
+
+    def __call__(self, data: bytes) -> bytes:
+        line = data.decode("ascii").strip()
+        self.commands.append(line)
+        gcode, *args = line.split()
+        params = {a[0]: a[1:] for a in args}
+        fmt = lambda v: "none" if v is None else f"{v:.3f}"  # noqa: E731
+        if gcode == "M115":
+            body = "FW:v1.1.0 HW:Opentrons-thermocycler-gen2 SerialNo:TC2-USB-01" if self.generation == 2 else \
+                "serial:TC1-USB-01 model:v02 version:v1.0.6"
+            return self._reply(gcode, body)
+        if gcode == "M126":
+            self.lid_open = True
+        elif gcode == "M127":
+            self.lid_open, self.plate_lifted = False, False
+        elif gcode == "M128":
+            if self.generation != 2:
+                return b"ERR003:unhandled gcode OK\n"
+            self.plate_lifted = True
+        elif gcode == "M119":
+            return self._reply(gcode, f"Lid:{'open' if self.lid_open else 'closed'}" + (" Seal:engaged" if self.generation == 2 else ""))
+        elif gcode == "M104":
+            self.block_target = self.block = float(params["S"])
+        elif gcode == "M105":
+            return self._reply(gcode, f"T:{fmt(self.block_target)} C:{self.block:.3f} H:none")
+        elif gcode == "M140":
+            self.lid_target = self.lid = float(params["S"])
+        elif gcode == "M141":
+            return self._reply(gcode, f"T:{fmt(self.lid_target)} C:{self.lid:.3f}")
+        elif gcode == "M14":
+            self.block_target = None
+        elif gcode == "M108":
+            self.lid_target = None
+        elif gcode == "M18":
+            self.block_target = self.lid_target = None
+        else:
+            return b"ERR003:unhandled gcode OK\n" if self.generation == 2 else b"error:unknown command\r\nok\r\nok\r\n"
+        return self._reply(gcode)
+
+
+class FakeTempDeckFirmware:
+    """Answers Opentrons Temperature Module G-codes over USB."""
+
+    def __init__(self, *, model: str = "temp_deck_v21") -> None:
+        self.model = model
+        self.target: float | None = None
+        self.current = 23.0
+        self.commands: list[str] = []
+
+    def __call__(self, data: bytes) -> bytes:
+        line = data.decode("ascii").strip()
+        self.commands.append(line)
+        gcode, *args = line.split()
+        body = ""
+        if gcode == "M115":
+            body = f"serial:TDV21-USB-01 model:{self.model} version:edge-1a2b3c"
+        elif gcode == "M104":
+            self.target = self.current = float(args[0][1:])
+        elif gcode == "M105":
+            body = f"T:{'none' if self.target is None else f'{self.target:g}'} C:{self.current:g}"
+        elif gcode == "M18":
+            self.target = None
+        else:
+            body = "error: unknown gcode"
+        return f"{body}\r\nok\r\nok\r\n".encode("ascii")

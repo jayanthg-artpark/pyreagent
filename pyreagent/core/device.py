@@ -13,7 +13,7 @@ import asyncio
 import re
 from contextvars import ContextVar
 from datetime import datetime
-from typing import Any, ClassVar, Generic, Mapping, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -49,14 +49,11 @@ class Activity(BaseModel):
 class Device(Generic[B]):
     device_type: ClassVar[str] = "device"
 
-    def __init__(self, name: str, backend: B, *, confirm: Mapping[str, bool] | None = None) -> None:
+    def __init__(self, name: str, backend: B) -> None:
         """
         Args:
             name: Unique, URL-safe id on this server, e.g. ``"balance-1"``.
             backend: The driver that talks to the instrument.
-            confirm: Per-capability override of ``requires_confirmation``, e.g.
-                ``{"dispense": False}`` once a protocol is validated. Overrides
-                are visible in GET /devices and in the audit trail of each call.
         """
         if not _NAME_RE.match(name):
             raise ValueError(f"device name {name!r} must match {_NAME_RE.pattern}")
@@ -66,10 +63,6 @@ class Device(Generic[B]):
         self._activity: Activity | None = None
         self._activity_task: asyncio.Task[Any] | None = None
         self._last_error: dict[str, Any] | None = None
-        self._confirm = dict(confirm or {})
-        unknown = set(self._confirm) - set(self.capability_specs())
-        if unknown:
-            raise ValueError(f"confirm overrides for unknown capabilities: {sorted(unknown)}")
 
     # -- class-level capability table --------------------------------------
 
@@ -89,9 +82,6 @@ class Device(Generic[B]):
                 f"Device {self.name!r} has no capability {name!r}.",
                 details={"capabilities": sorted(self.capability_specs())},
             ) from None
-
-    def requires_confirmation(self, name: str) -> bool:
-        return self._confirm.get(name, self.spec(name).meta.requires_confirmation)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -142,7 +132,7 @@ class Device(Generic[B]):
     def validate_arguments(self, capability_name: str, values: dict[str, Any]) -> None:
         """Override for checks ``Within`` cannot express (labware exists, wells valid...).
 
-        Must not touch the hardware: it runs before confirmation and locking.
+        Must not touch the hardware: it runs before locking, and before a job is created.
         """
 
     async def _dispatch(self, spec: CapabilitySpec, validated: BaseModel) -> Any:
@@ -247,23 +237,19 @@ class Device(Generic[B]):
             "simulated": self.backend.simulated,
             "limits": self.limits(),
             "capabilities": [
-                spec.describe(requires_confirmation=self.requires_confirmation(name))
-                for name, spec in sorted(self.capability_specs().items())
+                spec.describe() for _, spec in sorted(self.capability_specs().items())
             ],
         }
 
     # -- built-in capability --------------------------------------------------
 
-    @capability(
-        requires_confirmation=True,
-        allow_in_error=True,
-        hazard="Clears a fault and re-initialises the instrument. A human should have inspected it first.",
-    )
+    @capability(allow_in_error=True)
     async def reset(self) -> None:
         """Clear an error state by re-initialising the driver.
 
-        Only use this after a human has checked the instrument. Returns once the
-        device is idle again; if re-initialisation fails the device stays in error.
+        Check last_error first: a fault means the instrument's physical state was
+        unknown. Returns once the device is idle again; if re-initialisation fails
+        the device stays in error.
         """
         await self.backend.reset()
         await self.on_reset()

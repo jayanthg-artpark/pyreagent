@@ -18,8 +18,6 @@ def test_every_capability_is_documented(device_type):
         schema = spec.parameters_schema()
         for pname, prop in schema.get("properties", {}).items():
             assert prop.get("description"), f"{device_type}.{name}({pname}) has no Field(description=...)"
-        if spec.meta.requires_confirmation:
-            assert spec.meta.hazard, f"{device_type}.{name} is gated but has no hazard text for the human"
 
 
 def test_validation_rejects_bad_and_extra_arguments():

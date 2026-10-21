@@ -4,7 +4,6 @@ import math
 
 import pytest
 
-from conftest import approve_and_call
 from pyreagent.core import DeviceHub, InvalidArgument, NeedsAttention
 from pyreagent.devices.qpcr import estimate_ct
 
@@ -27,7 +26,7 @@ QPCR = {
 
 
 async def test_pcr_program_runs_and_holds(hub: DeviceHub):
-    accepted = await approve_and_call(hub, "pcr-1", "run_profile", {"profile": PCR})
+    accepted = await hub.invoke("pcr-1", "run_profile", {"profile": PCR})
     job = await hub.jobs.wait(accepted.job.id, 10)
     assert job.status == "succeeded", job.error
     assert job.result["total_cycles"] == 32 and job.result["steps_run"] == 62
@@ -36,7 +35,7 @@ async def test_pcr_program_runs_and_holds(hub: DeviceHub):
     assert status["block_target_c"] == 4 and status["lid_target_c"] == 105
 
 
-async def test_profile_limits_are_checked_before_approval(hub: DeviceHub):
+async def test_profile_limits_are_checked_before_running(hub: DeviceHub):
     too_hot = {**PCR, "stages": [{"steps": [{"temperature_c": 120, "hold_s": 10}]}]}
     with pytest.raises(InvalidArgument, match="outside"):
         await hub.invoke("pcr-1", "run_profile", {"profile": too_hot})
@@ -45,20 +44,19 @@ async def test_profile_limits_are_checked_before_approval(hub: DeviceHub):
         await hub.invoke("pcr-1", "run_profile", {"profile": too_long})
     with pytest.raises(InvalidArgument, match="Lid"):
         await hub.invoke("pcr-1", "run_profile", {"profile": {**PCR, "lid_temperature_c": 115}})
-    assert hub.confirmations.list() == []
 
 
 async def test_lid_must_be_closed(hub: DeviceHub):
-    await approve_and_call(hub, "pcr-1", "open_lid", {})
+    await hub.invoke("pcr-1", "open_lid", {})
     with pytest.raises(NeedsAttention, match="lid is open"):
-        await approve_and_call(hub, "pcr-1", "run_profile", {"profile": PCR})
+        await hub.invoke("pcr-1", "run_profile", {"profile": PCR})
     await hub.invoke("pcr-1", "close_lid")
     assert (await hub.invoke("pcr-1", "status")).result["lid_open"] is False
 
 
 async def test_deactivate_cancels_a_running_program(hub: DeviceHub):
     hub.device("pcr-1").backend.speedup = 50  # slow enough to interrupt
-    accepted = await approve_and_call(hub, "pcr-1", "run_profile", {"profile": PCR})
+    accepted = await hub.invoke("pcr-1", "run_profile", {"profile": PCR})
     status = (await hub.invoke("pcr-1", "deactivate", caller="human")).result
     job = await hub.jobs.wait(accepted.job.id, 5)
     assert job.status == "cancelled"
@@ -75,7 +73,7 @@ def test_estimate_ct_on_a_clean_sigmoid():
 
 async def test_qpcr_run_returns_curves_and_ct(hub: DeviceHub):
     args = {"plate": "generic_96_pcr_plate_200ul", "profile": QPCR, "channels": ["FAM", "HEX"], "wells": ["A1", "A2", "A3", "A4", "A5"]}
-    job = await hub.jobs.wait((await approve_and_call(hub, "qpcr-1", "run_qpcr", args)).job.id, 10)
+    job = await hub.jobs.wait((await hub.invoke("qpcr-1", "run_qpcr", args)).job.id, 10)
     assert job.status == "succeeded", job.error
     result = job.result
     assert result["acquisitions"] == 40 and set(result["fluorescence"]) == set(args["wells"])
@@ -101,6 +99,5 @@ async def test_qpcr_validation(hub: DeviceHub):
         await hub.invoke("qpcr-1", "run_qpcr", {**base, "profile": PCR})
     with pytest.raises(InvalidArgument):
         await hub.invoke("qpcr-1", "run_qpcr", {**base, "wells": ["Q1"]})
-    assert hub.confirmations.list() == []
     # A qPCR instrument is also a thermocycler.
     assert {"run_profile", "run_qpcr", "open_lid", "deactivate"} <= set(hub.device("qpcr-1").capability_specs())

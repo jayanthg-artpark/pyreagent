@@ -2,7 +2,7 @@
 
 The HTTP routes and the MCP tools are thin adapters over ``DeviceHub.invoke``,
 so every path into a device gets the same validation, reservation check,
-human-in-the-loop gate, job handling, idempotency and audit record.
+job handling, idempotency and audit record.
 """
 
 from __future__ import annotations
@@ -20,10 +20,8 @@ from pydantic import BaseModel
 
 from .audit import AuditLog
 from .capability import CapabilitySpec
-from .confirmations import Confirmation, ConfirmationManager
 from .device import Device
 from .errors import (
-    ConfirmationRequired,
     DeviceReserved,
     InvalidArgument,
     NotFound,
@@ -62,7 +60,6 @@ class DeviceHub:
         *,
         name: str = "pyreagent",
         audit: AuditLog | None = None,
-        confirmation_ttl_s: float = 600,
         job_retention: int = 500,
         idempotency_ttl_s: float = 24 * 3600,
     ) -> None:
@@ -74,7 +71,6 @@ class DeviceHub:
             self.devices[device.name] = device
         self.audit = audit or AuditLog()
         self.jobs = JobManager(retention=job_retention)
-        self.confirmations = ConfirmationManager(ttl_s=confirmation_ttl_s)
         self._reservations: dict[str, Reservation] = {}
         self._idempotency: dict[str, tuple[str, float, asyncio.Task[Invocation]]] = {}
         self._idempotency_ttl = idempotency_ttl_s
@@ -138,7 +134,6 @@ class DeviceHub:
         args: dict[str, Any] | None = None,
         *,
         caller: str = ANONYMOUS,
-        confirmation_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> Invocation:
         """Run one capability call through every safety check.
@@ -161,17 +156,15 @@ class DeviceHub:
             self._check_reservation(device, spec, caller)
             device.check_ready(spec)
             device.check_arguments(spec, validated)
-            confirmation = self._gate(device, spec, canonical, caller, confirmation_id)
         except PyreagentError as err:
             self.audit.record(
                 event="invoke", caller=caller, device=device_name, capability=capability_name,
                 args=canonical if canonical is not None else args, outcome="rejected", error=err.to_dict(),
-                confirmation_id=err.details.get("confirmation_id") if isinstance(err, ConfirmationRequired) else confirmation_id,
             )
             raise
 
         task = asyncio.Task(
-            self._execute(device, spec, validated, canonical, caller, confirmation),
+            self._execute(device, spec, validated, canonical, caller),
             loop=asyncio.get_running_loop(),
             eager_start=True,
         )
@@ -187,12 +180,8 @@ class DeviceHub:
         validated: BaseModel,
         canonical: dict[str, Any],
         caller: str,
-        confirmation: Confirmation | None,
     ) -> Invocation:
-        common: dict[str, Any] = dict(
-            event="invoke", caller=caller, device=device.name, capability=spec.name, args=canonical,
-            confirmation_id=confirmation.id if confirmation else None,
-        )
+        common: dict[str, Any] = dict(event="invoke", caller=caller, device=device.name, capability=spec.name, args=canonical)
         if spec.meta.long_running:
             async def run() -> Any:
                 return spec.dump_result(await device._dispatch(spec, validated))
@@ -226,41 +215,6 @@ class DeviceHub:
             event="job_finished", caller=job.caller, device=job.device, capability=job.capability, args=job.args,
             outcome=job.status.value, result=job.result, error=job.error, job_id=job.id, duration_ms=duration,
         )
-
-    # -- human-in-the-loop -----------------------------------------------------
-
-    def _gate(
-        self, device: Device[Any], spec: CapabilitySpec, canonical: dict[str, Any], caller: str, confirmation_id: str | None
-    ) -> Confirmation | None:
-        if not device.requires_confirmation(spec.name):
-            return None
-        if confirmation_id:
-            return self.confirmations.consume(confirmation_id, device=device.name, capability=spec.name, args=canonical)
-        confirmation, created = self.confirmations.request(
-            device=device.name, capability=spec.name, args=canonical, caller=caller, hazard=spec.meta.hazard
-        )
-        if created:
-            self.audit.record(
-                event="confirmation_requested", caller=caller, device=device.name, capability=spec.name,
-                args=canonical, outcome="pending", confirmation_id=confirmation.id,
-            )
-        raise ConfirmationRequired(
-            f"{device.name}.{spec.name} needs human approval" + (f": {spec.meta.hazard}" if spec.meta.hazard else "."),
-            details={
-                "confirmation_id": confirmation.id,
-                "hazard": spec.meta.hazard,
-                "expires_at": confirmation.expires_at.isoformat(),
-                "status_url": f"/confirmations/{confirmation.id}",
-            },
-        )
-
-    def decide_confirmation(self, confirmation_id: str, *, approve: bool, operator: str, reason: str | None = None) -> Confirmation:
-        c = self.confirmations.decide(confirmation_id, approve=approve, operator=operator, reason=reason)
-        self.audit.record(
-            event="confirmation_approved" if approve else "confirmation_rejected", caller=operator,
-            device=c.device, capability=c.capability, args=c.args, outcome="ok", confirmation_id=c.id,
-        )
-        return c
 
     # -- reservations ------------------------------------------------------------
 

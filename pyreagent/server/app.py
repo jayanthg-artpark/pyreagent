@@ -23,7 +23,6 @@ from starlette.routing import Route
 
 from .. import __version__
 from ..core.capability import CapabilitySpec
-from ..core.confirmations import ConfirmationStatus
 from ..core.device import Device
 from ..core.errors import Forbidden, InvalidArgument, NotFound, PyreagentError
 from ..core.hub import ANONYMOUS, DeviceHub, Invocation
@@ -50,10 +49,6 @@ class ReserveBody(BaseModel):
     ttl_s: float = Field(default=300, ge=1, le=3600, description="Reservation lifetime in seconds; reserve again to extend.")
 
 
-class DecisionBody(BaseModel):
-    reason: Optional[str] = Field(default=None, description="Shown to the agent, and kept in the audit log.")
-
-
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": ErrorBody, "description": text}
     for status, text in {
@@ -61,7 +56,6 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
         409: "Device busy, faulted, or needs attention",
         422: "Invalid arguments",
         423: "Device reserved by another caller",
-        428: "Human confirmation required",
         503: "Device offline",
     }.items()
 }
@@ -90,8 +84,8 @@ def create_app(
     """Build the device server.
 
     Args:
-        operator_token: If set, approving confirmations, force-releasing reservations
-            and (dis)connecting devices require ``X-Operator-Token``. Leave unset only on a trusted bench.
+        operator_token: If set, force-releasing reservations and (dis)connecting devices
+            require ``X-Operator-Token``. Leave unset only on a trusted network.
         registry_url, public_url: Announce this server to a registry under ``public_url``.
         allowed_hosts: Host headers accepted by the MCP endpoint (DNS-rebinding protection),
             e.g. ``["localhost:*", "bench-1.lab:*"]``. None disables the check.
@@ -156,7 +150,7 @@ def create_app(
         if operator_token:
             supplied = request.headers.get("x-operator-token", "")
             if not hmac.compare_digest(supplied.encode(), operator_token.encode()):
-                raise Forbidden("This endpoint needs a valid X-Operator-Token (it is for humans, not agents).")
+                raise Forbidden("This endpoint needs a valid X-Operator-Token.")
         return request.headers.get("x-caller") or "operator"
 
     # -- discovery --------------------------------------------------------------
@@ -221,25 +215,6 @@ def create_app(
         hub.audit.record(event="cancel", caller=_caller(x_caller), device=job.device, capability=job.capability, job_id=job.id, outcome=job.status.value)
         return job.model_dump(mode="json")
 
-    # -- confirmations ------------------------------------------------------------
-
-    @app.get("/confirmations", tags=["confirmations"])
-    async def list_confirmations(status: Optional[ConfirmationStatus] = ConfirmationStatus.PENDING) -> dict[str, Any]:
-        return {"confirmations": [c.model_dump(mode="json") for c in hub.confirmations.list(status=status)]}
-
-    @app.get("/confirmations/{confirmation_id}", tags=["confirmations"], responses=ERROR_RESPONSES)
-    async def get_confirmation(confirmation_id: str) -> dict[str, Any]:
-        return hub.confirmations.get(confirmation_id).model_dump(mode="json")
-
-    @app.post("/confirmations/{confirmation_id}/approve", tags=["confirmations"], responses=ERROR_RESPONSES)
-    async def approve(confirmation_id: str, request: Request, body: DecisionBody = Body(default_factory=DecisionBody)) -> dict[str, Any]:
-        """Human approval of a gated action. Requires the operator token when one is configured."""
-        return hub.decide_confirmation(confirmation_id, approve=True, operator=operator(request), reason=body.reason).model_dump(mode="json")
-
-    @app.post("/confirmations/{confirmation_id}/reject", tags=["confirmations"], responses=ERROR_RESPONSES)
-    async def reject(confirmation_id: str, request: Request, body: DecisionBody = Body(default_factory=DecisionBody)) -> dict[str, Any]:
-        return hub.decide_confirmation(confirmation_id, approve=False, operator=operator(request), reason=body.reason).model_dump(mode="json")
-
     # -- audit ----------------------------------------------------------------------
 
     @app.get("/audit", tags=["audit"])
@@ -256,7 +231,6 @@ def _add_capability_route(app: FastAPI, hub: DeviceHub, device: Device[Any], spe
     model = spec.args_model
     has_fields = bool(model.model_fields)
     required = any(f.is_required() for f in model.model_fields.values())
-    gated = device.requires_confirmation(spec.name)
     device_name, capability_name = device.name, spec.name
 
     async def endpoint(**kwargs: Any) -> JSONResponse:
@@ -266,7 +240,6 @@ def _add_capability_route(app: FastAPI, hub: DeviceHub, device: Device[Any], spe
             capability_name,
             body.model_dump(mode="json") if body is not None else {},
             caller=_caller(kwargs.get("x_caller")),
-            confirmation_id=kwargs.get("x_confirmation_id"),
             idempotency_key=kwargs.get("idempotency_key"),
         )
         status = 202 if invocation.status == "accepted" else 200
@@ -288,20 +261,11 @@ def _add_capability_route(app: FastAPI, hub: DeviceHub, device: Device[Any], spe
             default=Header(default=None, alias="Idempotency-Key", description="Repeat a request safely: same key, same outcome."),
         ),
     ]
-    if gated:
-        params.append(
-            inspect.Parameter(
-                "x_confirmation_id", inspect.Parameter.KEYWORD_ONLY, annotation=Optional[str],
-                default=Header(default=None, alias="X-Confirmation-Id", description="Id of an approved confirmation for this exact call."),
-            )
-        )
     endpoint.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]
 
     flags = []
     if spec.meta.long_running:
         flags.append("**Long-running**: returns 202 with a job; poll `GET /jobs/{id}`.")
-    if gated:
-        flags.append(f"**Requires human confirmation**: {spec.meta.hazard or 'gated action'} First call returns 428 with a confirmation_id.")
     if spec.meta.read_only:
         flags.append("**Read-only**: allowed while busy or reserved.")
     if spec.meta.interrupt:

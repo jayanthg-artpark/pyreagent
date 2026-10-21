@@ -62,14 +62,3 @@ async def slow_hub():
     yield h
     await h.stop()
 
-
-async def approve_and_call(hub: DeviceHub, device: str, capability: str, args: dict, *, caller: str = "agent"):
-    """Run a gated call the way an agent would: request, get human approval, repeat."""
-    from pyreagent.core.errors import ConfirmationRequired
-
-    try:
-        return await hub.invoke(device, capability, args, caller=caller)
-    except ConfirmationRequired as err:
-        cid = err.details["confirmation_id"]
-    hub.decide_confirmation(cid, approve=True, operator="human")
-    return await hub.invoke(device, capability, args, caller=caller, confirmation_id=cid)

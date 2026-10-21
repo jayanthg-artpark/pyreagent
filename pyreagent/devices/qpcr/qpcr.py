@@ -8,7 +8,7 @@ and adds run_qpcr.
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -37,9 +37,8 @@ class Qpcr(Thermocycler):
         max_c: float = 99.0,
         max_lid_c: float = 110.0,
         max_cycles: int = 100,
-        confirm: Mapping[str, bool] | None = None,
     ) -> None:
-        super().__init__(name, backend, min_c=min_c, max_c=max_c, max_lid_c=max_lid_c, max_cycles=max_cycles, confirm=confirm)
+        super().__init__(name, backend, min_c=min_c, max_c=max_c, max_lid_c=max_lid_c, max_cycles=max_cycles)
         self.labware = labware or DEFAULT_CATALOG
 
     def limits(self) -> dict[str, Any]:
@@ -61,11 +60,7 @@ class Qpcr(Thermocycler):
         if values["profile"].acquisitions == 0:
             raise InvalidArgument("The profile never acquires fluorescence; set acquire=true on the step to read each cycle.")
 
-    @capability(
-        long_running=True,
-        requires_confirmation=True,
-        hazard="Heats the block to the program's temperatures and the lid to lid_temperature_c for the whole run.",
-    )
+    @capability(long_running=True)
     async def run_qpcr(
         self,
         plate: Annotated[str, Field(description="Labware id of the sealed plate in the block, from GET /labware.")],

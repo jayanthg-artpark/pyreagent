@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
 from ...core.capability import Within, capability
 from ...core.device import Device
-from ...core.errors import InvalidArgument, NeedsAttention
+from ...core.errors import InvalidArgument, NeedsAttention, NotSupported
 from .backend import ThermocyclerBackend
 from .models import ProfileRun, ThermalProfile, ThermocyclerStatus
 
@@ -30,9 +30,8 @@ class Thermocycler(Device[ThermocyclerBackend]):
         max_c: float = 99.0,
         max_lid_c: float = 110.0,
         max_cycles: int = 100,
-        confirm: Mapping[str, bool] | None = None,
     ) -> None:
-        super().__init__(name, backend, confirm=confirm)
+        super().__init__(name, backend)
         self.min_c, self.max_c, self.max_lid_c, self.max_cycles = min_c, max_c, max_lid_c, max_cycles
 
     def limits(self) -> dict[str, Any]:
@@ -52,21 +51,23 @@ class Thermocycler(Device[ThermocyclerBackend]):
             raise InvalidArgument(f"Lid temperature {profile.lid_temperature_c} °C exceeds {self.max_lid_c} °C.")
         if profile.total_cycles > self.max_cycles:
             raise InvalidArgument(f"{profile.total_cycles} cycles exceeds limits.max_cycles ({self.max_cycles}).")
+        if "ramp_rate" not in self.backend.features and any(
+            step.ramp_rate_c_per_s for stage in profile.stages for step in stage.steps
+        ):
+            raise NotSupported("This thermocycler cannot set ramp rates; remove ramp_rate_c_per_s from the steps.")
 
     def validate_arguments(self, capability_name: str, values: dict[str, Any]) -> None:
         if capability_name in _PROGRAMS:
             self._check_profile(values["profile"])
+        if capability_name == "lift_plate" and "plate_lift" not in self.backend.features:
+            raise NotSupported("This thermocycler has no plate lift.")
 
     async def _require_lid_closed(self) -> None:
         if await self.backend.lid_is_open():
             raise NeedsAttention("The lid is open.", recoverable=True,
                                  suggested_action="Check the plate is seated and sealed, call close_lid, then retry.")
 
-    @capability(
-        long_running=True,
-        requires_confirmation=True,
-        hazard="Heats the block to the program's temperatures and the lid to lid_temperature_c for the whole run.",
-    )
+    @capability(long_running=True)
     async def run_profile(self, profile: Annotated[ThermalProfile, Field(description="The PCR program to run.")]) -> ProfileRun:
         """Run a PCR program on the plate in the block. Runs as a job.
 
@@ -80,7 +81,7 @@ class Thermocycler(Device[ThermocyclerBackend]):
         return ProfileRun(total_cycles=profile.total_cycles, steps_run=steps, duration_s=round(loop.time() - started, 3),
                           holding_at_c=profile.final_hold_c)
 
-    @capability(requires_confirmation=True, hazard="Turns the block heater/cooler on.")
+    @capability
     async def set_block_temperature(
         self,
         temperature_c: Annotated[float, Field(description="Block setpoint, °C, within limits.min_c .. limits.max_c."), Within("min_c", "max_c")],
@@ -89,7 +90,7 @@ class Thermocycler(Device[ThermocyclerBackend]):
         await self.backend.set_block_temperature(temperature_c)
         return await self.backend.read()
 
-    @capability(requires_confirmation=True, hazard="Opens the motorised lid; the lid and the plate may be hot.")
+    @capability
     async def open_lid(self) -> ThermocyclerStatus:
         """Open the lid to load or remove a plate."""
         await self.backend.open_lid()
@@ -99,6 +100,12 @@ class Thermocycler(Device[ThermocyclerBackend]):
     async def close_lid(self) -> ThermocyclerStatus:
         """Close the lid. The plate must be seated and sealed first."""
         await self.backend.close_lid()
+        return await self.backend.read()
+
+    @capability
+    async def lift_plate(self) -> ThermocyclerStatus:
+        """Raise the plate off the block so it can be removed (Opentrons Thermocycler GEN2). The lid must be open."""
+        await self.backend.lift_plate()
         return await self.backend.read()
 
     @capability(read_only=True)

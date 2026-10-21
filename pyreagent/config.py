@@ -13,7 +13,6 @@
     driver = "mettler_toledo"        # brand folder (or "brand.module:Class", or "pkg.mod:Class")
     driver_options = { port = "COM3", baudrate = 9600 }   # passed to the driver
     options = {}                     # passed to the device (limits etc.)
-    confirm = {}                     # per-capability confirmation overrides
 """
 
 from __future__ import annotations
@@ -46,7 +45,6 @@ class ServerSettings:
     audit_log: str | None = None
     operator_token_env: str = "PYREAGENT_OPERATOR_TOKEN"
     mcp_allowed_hosts: list[str] | None = None
-    confirmation_ttl_s: float = 600
     base_dir: Path = field(default_factory=Path.cwd, repr=False)
 
     @property
@@ -58,7 +56,7 @@ class ServerSettings:
         return self.base_dir / self.audit_log if self.audit_log else None
 
 
-_DEVICE_KEYS = {"name", "type", "driver", "driver_options", "options", "confirm"}
+_DEVICE_KEYS = {"name", "type", "driver", "driver_options", "options"}
 
 
 def build_device(entry: dict[str, Any]) -> Device[Any]:
@@ -71,7 +69,7 @@ def build_device(entry: dict[str, Any]) -> Device[Any]:
     try:
         cls = device_class(entry["type"])
         backend = resolve_driver(entry["type"], entry["driver"])(**entry.get("driver_options", {}))
-        return cls(entry["name"], backend, confirm=entry.get("confirm"), **entry.get("options", {}))
+        return cls(entry["name"], backend, **entry.get("options", {}))
     except (TypeError, ValueError) as exc:
         raise ConfigError(str(exc)) from exc
 
@@ -105,6 +103,5 @@ def load_config(path: str | Path) -> tuple[ServerSettings, DeviceHub]:
         devices,
         name=settings.name,
         audit=AuditLog(settings.audit_path),
-        confirmation_ttl_s=settings.confirmation_ttl_s,
     )
     return settings, hub

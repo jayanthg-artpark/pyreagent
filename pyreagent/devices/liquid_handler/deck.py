@@ -2,8 +2,11 @@
 
 Every operation validates first and only then mutates, so running an operation
 on a ``copy()`` is a dry run. The frontend uses that to refuse impossible plans
-(no tips left, source too empty, destination would overflow) before a human is
-asked to approve them, and again right before each motion.
+(no tips left, source too empty, destination would overflow) before a job is
+created, and again right before each motion.
+
+Which wells a pipette touches depends on its nozzle layout (``nozzles.py``):
+the layout is chosen when tips are picked up and applies until they are dropped.
 """
 
 from __future__ import annotations
@@ -12,8 +15,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from ...core.errors import InvalidArgument, NeedsAttention
-from ...labware import Labware, LabwareCatalog, parse_well, row_label
-from .models import DeckState, PipetteInfo, PipetteState, SlotState
+from ...labware import Labware, LabwareCatalog
+from .models import DeckState, NozzleLayout, PipetteInfo, PipetteState, SlotState
+from .nozzles import tip_shadow, wells_touched
 
 EPS = 1e-6
 LIQUID_KINDS = ("plate", "reservoir", "tube_rack")
@@ -31,23 +35,9 @@ class Tip:
     attached: bool = False
     capacity_ul: float | None = None
     contents_ul: float = 0.0
-
-
-def channel_wells(labware: Labware, well: str, channels: int) -> list[str]:
-    """Wells touched when the first channel is at ``well`` (repeats for a trough shared by all channels)."""
-    (well,) = labware.check_wells([well])
-    if channels == 1:
-        return [well]
-    if labware.rows == 1:
-        return [well] * channels
-    if labware.rows % channels:
-        raise InvalidArgument(f"A {channels}-channel pipette cannot address {labware.id} ({labware.rows} rows).")
-    step = labware.rows // channels
-    row, column = parse_well(well)
-    if row >= step:
-        top = "row A" if step == 1 else f"rows A-{row_label(step - 1)}"
-        raise InvalidArgument(f"Position a {channels}-channel pipette with its first channel in {top}, not {well}.")
-    return [f"{row_label(row + i * step)}{column}" for i in range(channels)]
+    origin: tuple[str, str, tuple[str, ...]] | None = None
+    """(slot, well, tip wells) the attached tips came from, so they can be returned."""
+    layout: NozzleLayout = field(default_factory=NozzleLayout)
 
 
 class DeckModel:
@@ -60,7 +50,7 @@ class DeckModel:
     def copy(self) -> "DeckModel":
         clone = DeckModel(self.slots, self.catalog)
         clone.placed = {s: Placed(p.labware, dict(p.volumes), set(p.used_tips)) for s, p in self.placed.items()}
-        clone.tips = {n: Tip(t.attached, t.capacity_ul, t.contents_ul) for n, t in self.tips.items()}
+        clone.tips = {n: Tip(t.attached, t.capacity_ul, t.contents_ul, t.origin, t.layout) for n, t in self.tips.items()}
         return clone
 
     # -- labware --------------------------------------------------------------------
@@ -103,49 +93,26 @@ class DeckModel:
         self._check_slot(slot)
         self.placed.pop(slot, None)
 
+    def move(self, from_slot: str, to_slot: str) -> None:
+        """Labware (with its tracked liquid and tips) moves to an empty slot."""
+        self.get(from_slot)
+        self._check_slot(to_slot)
+        if to_slot in self.placed:
+            raise InvalidArgument(f"Slot {to_slot} already holds {self.placed[to_slot].labware.id}.")
+        if any(t.attached and t.origin and t.origin[0] == from_slot for t in self.tips.values()):
+            raise InvalidArgument(f"A pipette holds tips from slot {from_slot}; drop or return them before moving the rack.")
+        self.placed[to_slot] = self.placed.pop(from_slot)
+
+    # -- addressing ---------------------------------------------------------------------
+
+    def channel_wells(self, labware: Labware, well: str, pipette: PipetteInfo) -> list[str]:
+        """Wells under the pipette's active nozzles (repeats for a trough shared by several nozzles)."""
+        return wells_touched(labware, well, pipette.channels, self.tip(pipette.name).layout)
+
     # -- tips -------------------------------------------------------------------------
 
     def tip(self, pipette: str) -> Tip:
         return self.tips.setdefault(pipette, Tip())
-
-    def next_tip(self, pipette: PipetteInfo, slot: str | None = None) -> tuple[str, str]:
-        """First unused tip (or full column, for 8 channels), column by column.
-
-        Without ``slot``: racks of compatible tips, smallest tip size first, then in slot order.
-        """
-        if slot is not None:
-            candidates = [slot]
-            self._check_tips_fit(pipette, self.get(slot, kinds=("tip_rack",)).labware)
-        else:
-            racks = [(p.labware.tip_volume_ul or 0.0, self.slots.index(s), s) for s, p in self.placed.items()
-                     if p.labware.kind == "tip_rack" and pipette.accepts_tip(p.labware.tip_volume_ul or 0.0)]
-            candidates = [s for _, _, s in sorted(racks)]
-        for s in candidates:
-            placed = self.placed[s]
-            for well in placed.labware.wells_by_column():
-                if pipette.channels > 1 and parse_well(well)[0] != 0:
-                    continue
-                if not placed.used_tips.intersection(channel_wells(placed.labware, well, pipette.channels)):
-                    return s, well
-        raise NeedsAttention(
-            f"No {'full column of ' if pipette.channels > 1 else ''}unused tips left for pipette {pipette.name}"
-            + (f" in slot {slot}." if slot else "."),
-            suggested_action="Ask a human to replace the tip rack, then call load_labware for that slot to reset tip tracking.",
-        )
-
-    def pick_up(self, pipette: PipetteInfo, slot: str, well: str) -> None:
-        tip = self.tip(pipette.name)
-        if tip.attached:
-            raise InvalidArgument(f"Pipette {pipette.name} already has a tip; call drop_tip first.")
-        placed = self.get(slot, kinds=("tip_rack",))
-        wells = channel_wells(placed.labware, well, pipette.channels)
-        used = sorted(placed.used_tips.intersection(wells))
-        if used:
-            raise InvalidArgument(f"Tip(s) {', '.join(used)} in slot {slot} were already used.")
-        self._check_tips_fit(pipette, placed.labware)
-        tip_volume = placed.labware.tip_volume_ul or 0.0
-        placed.used_tips.update(wells)
-        tip.attached, tip.capacity_ul, tip.contents_ul = True, min(tip_volume, pipette.max_volume_ul), 0.0
 
     @staticmethod
     def _check_tips_fit(pipette: PipetteInfo, labware: Labware) -> None:
@@ -153,8 +120,77 @@ class DeckModel:
             raise InvalidArgument(f"Pipette {pipette.name} ({pipette.max_volume_ul:g} µL) does not take {labware.id} tips "
                                   f"({labware.tip_volume_ul:g} µL).")
 
+    def _pickup_problem(self, pipette: PipetteInfo, placed: Placed, well: str, layout: NozzleLayout) -> str | None:
+        """Why a pickup at ``well`` is impossible, or None. Raises for positions the head cannot take at all."""
+        wells = wells_touched(placed.labware, well, pipette.channels, layout)
+        used = sorted(placed.used_tips.intersection(wells))
+        if used:
+            return f"tip(s) {', '.join(used)} were already used"
+        blocked = [w for w in tip_shadow(placed.labware, well, pipette.channels, layout) if w not in placed.used_tips]
+        if blocked:
+            return (f"the unused nozzles would land on tips at {', '.join(blocked[:6])}{'...' if len(blocked) > 6 else ''}; "
+                    "use those tips first, or let pyreagent choose the position")
+        return None
+
+    def next_tip(self, pipette: PipetteInfo, slot: str | None = None, layout: NozzleLayout | None = None) -> tuple[str, str]:
+        """First position (column by column) where the layout's active nozzles all find unused tips.
+
+        Without ``slot``: racks of compatible tips, smallest tip size first, then in slot order.
+        """
+        layout = layout or NozzleLayout()
+        if slot is not None:
+            candidates = [slot]
+            self._check_tips_fit(pipette, self.get(slot, kinds=("tip_rack",)).labware)
+        else:
+            racks = [(p.labware.tip_volume_ul or 0.0, self.slots.index(s), s) for s, p in self.placed.items()
+                     if p.labware.kind == "tip_rack" and pipette.accepts_tip(p.labware.tip_volume_ul or 0.0) and s in self.slots]
+            candidates = [s for _, _, s in sorted(racks)]
+        for s in candidates:
+            placed = self.placed[s]
+            for well in placed.labware.wells_by_column():
+                try:
+                    if self._pickup_problem(pipette, placed, well, layout) is None:
+                        return s, well
+                except InvalidArgument:
+                    continue
+        raise NeedsAttention(
+            f"No unused tips left for pipette {pipette.name}"
+            + (f" with the {layout.style} layout" if layout.style != "all" else "") + (f" in slot {slot}." if slot else "."),
+            suggested_action="Ask a human to replace the tip rack, then call load_labware for that slot to reset tip tracking.",
+        )
+
+    def pick_up(self, pipette: PipetteInfo, slot: str, well: str, layout: NozzleLayout | None = None) -> None:
+        layout = layout or NozzleLayout()
+        tip = self.tip(pipette.name)
+        if tip.attached:
+            raise InvalidArgument(f"Pipette {pipette.name} already has a tip; call drop_tip first.")
+        placed = self.get(slot, kinds=("tip_rack",))
+        self._check_tips_fit(pipette, placed.labware)
+        problem = self._pickup_problem(pipette, placed, well, layout)
+        if problem:
+            raise InvalidArgument(f"Cannot pick up at slot {slot} {well}: {problem}.")
+        wells = wells_touched(placed.labware, well, pipette.channels, layout)
+        placed.used_tips.update(wells)
+        tip.attached, tip.capacity_ul, tip.contents_ul = True, min(placed.labware.tip_volume_ul or 0.0, pipette.max_volume_ul), 0.0
+        tip.origin, tip.layout = (slot, well, tuple(wells)), layout
+
     def drop(self, pipette: PipetteInfo) -> None:
-        self.tips[pipette.name] = Tip()
+        self.tips[pipette.name] = Tip(layout=self.tip(pipette.name).layout)
+
+    def return_tips(self, pipette: PipetteInfo) -> tuple[str, str]:
+        """Put the attached tips back where they came from; they count as unused again. Returns (slot, well)."""
+        tip = self.tip(pipette.name)
+        if not tip.attached or tip.origin is None:
+            raise InvalidArgument(f"Pipette {pipette.name} has no tip to return.")
+        if tip.contents_ul > EPS:
+            raise InvalidArgument(f"Pipette {pipette.name} still holds {tip.contents_ul:g} µL; dispense or blow out first.")
+        slot, well, wells = tip.origin
+        placed = self.placed.get(slot)
+        if placed is None or placed.labware.kind != "tip_rack":
+            raise InvalidArgument(f"The tip rack these tips came from is no longer in slot {slot}.")
+        placed.used_tips.difference_update(wells)
+        self.drop(pipette)
+        return slot, well
 
     # -- liquid -------------------------------------------------------------------------
 
@@ -174,7 +210,7 @@ class DeckModel:
             raise InvalidArgument(
                 f"Pipette {pipette.name} would hold {tip.contents_ul + volume_ul:g} µL; its tip holds at most {capacity:g} µL."
             )
-        need = Counter(channel_wells(placed.labware, well, pipette.channels))
+        need = Counter(self.channel_wells(placed.labware, well, pipette))
         for w, n in need.items():
             have = placed.volumes.get(w)
             if have is not None and have + EPS < n * volume_ul:
@@ -197,7 +233,13 @@ class DeckModel:
             raise InvalidArgument(f"Pipette {pipette.name}'s tip is empty.")
         if volume > tip.contents_ul + EPS:
             raise InvalidArgument(f"Pipette {pipette.name} holds {tip.contents_ul:g} µL; cannot dispense {volume:g} µL.")
-        need = Counter(channel_wells(placed.labware, well, pipette.channels))
+        self._add(placed, slot, self.channel_wells(placed.labware, well, pipette), volume)
+        tip.contents_ul = max(0.0, tip.contents_ul - volume)
+        return volume
+
+    @staticmethod
+    def _add(placed: Placed, slot: str, wells: list[str], volume: float) -> None:
+        need = Counter(wells)
         capacity = placed.labware.well_volume_ul
         for w, n in need.items():
             have = placed.volumes.get(w)
@@ -210,8 +252,29 @@ class DeckModel:
             have = placed.volumes.get(w)
             if have is not None:
                 placed.volumes[w] = have + n * volume
-        tip.contents_ul = max(0.0, tip.contents_ul - volume)
-        return volume
+
+    def blow_out(self, pipette: PipetteInfo, slot: str, well: str) -> None:
+        """Whatever is left in the tip ends up in the well."""
+        placed = self.get(slot, kinds=LIQUID_KINDS)
+        tip = self._tip_for_liquid(pipette)
+        if tip.contents_ul > EPS:
+            self._add(placed, slot, self.channel_wells(placed.labware, well, pipette), tip.contents_ul)
+        tip.contents_ul = 0.0
+
+    def touch_tip(self, pipette: PipetteInfo, slot: str, well: str) -> None:
+        placed = self.get(slot, kinds=LIQUID_KINDS)
+        self._tip_for_liquid(pipette)
+        self.channel_wells(placed.labware, well, pipette)
+
+    def check_probe(self, pipette: PipetteInfo, slot: str, wells: list[str]) -> list[str]:
+        placed = self.get(slot, kinds=LIQUID_KINDS)
+        tip = self._tip_for_liquid(pipette)
+        if tip.contents_ul > EPS:
+            raise InvalidArgument("Liquid probing needs an empty tip; dispense or blow out first.")
+        checked = placed.labware.check_wells(wells)
+        for w in checked:
+            self.channel_wells(placed.labware, w, pipette)
+        return checked
 
     # -- reporting -------------------------------------------------------------------------
 
@@ -233,6 +296,6 @@ class DeckModel:
         states = []
         for info in pipettes.values():
             t = self.tip(info.name)
-            states.append(PipetteState(**info.model_dump(), tip_attached=t.attached, tip_capacity_ul=t.capacity_ul,
+            states.append(PipetteState(**info.model_dump(), layout=t.layout, tip_attached=t.attached, tip_capacity_ul=t.capacity_ul,
                                        tip_contents_ul=round(t.contents_ul, 4)))
         return DeckState(slots=slots, pipettes=states)

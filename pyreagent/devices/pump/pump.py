@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -38,7 +38,6 @@ class Pump(Device[PumpBackend]):
         min_rate_ml_min: float = 0.0,
         volume_tolerance: float = 0.01,
         poll_interval_s: float = 0.25,
-        confirm: Mapping[str, bool] | None = None,
     ) -> None:
         """
         Args:
@@ -46,7 +45,7 @@ class Pump(Device[PumpBackend]):
             max_rate_ml_min, min_rate_ml_min: Allowed flow-rate range for the fitted syringe/tubing.
             volume_tolerance: A move that ends more than this fraction short of the request is a fault.
         """
-        super().__init__(name, backend, confirm=confirm)
+        super().__init__(name, backend)
         self.max_volume_ml = max_volume_ml
         self.max_rate_ml_min = max_rate_ml_min
         self.min_rate_ml_min = min_rate_ml_min
@@ -61,7 +60,7 @@ class Pump(Device[PumpBackend]):
             "max_rate_ml_min": self.max_rate_ml_min,
         }
 
-    @capability(long_running=True, requires_confirmation=True, hazard="Pumps liquid out into the connected destination.")
+    @capability(long_running=True)
     async def dispense(self, volume_ml: VolumeMl, rate_ml_min: RateMlMin) -> PumpRun:
         """Dispense (infuse) a volume at a flow rate.
 
@@ -70,7 +69,7 @@ class Pump(Device[PumpBackend]):
         """
         return await self._move(PumpDirection.INFUSE, volume_ml, rate_ml_min)
 
-    @capability(long_running=True, requires_confirmation=True, hazard="Draws liquid back into the syringe or line.")
+    @capability(long_running=True)
     async def withdraw(self, volume_ml: VolumeMl, rate_ml_min: RateMlMin) -> PumpRun:
         """Withdraw (aspirate) a volume at a flow rate. Runs as a job, like dispense."""
         return await self._move(PumpDirection.WITHDRAW, volume_ml, rate_ml_min)

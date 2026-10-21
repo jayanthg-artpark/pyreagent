@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from conftest import approve_and_call, make_devices
+from conftest import make_devices
 from pyreagent.core import DeviceHub, DeviceState, InvalidArgument, NeedsAttention
 
 
@@ -24,7 +24,7 @@ async def test_deck_from_config(hub: DeviceHub):
 async def test_transfer_moves_liquid_and_tracks_tips(hub: DeviceHub):
     args = {"source_slot": "3", "source_wells": ["A1"], "destination_slot": "4",
             "destination_wells": ["A1", "B1", "C1"], "volume_ul": 100, "pipette": "left"}
-    accepted = await approve_and_call(hub, "lh-1", "transfer", args)
+    accepted = await hub.invoke("lh-1", "transfer", args)
     job = await hub.jobs.wait(accepted.job.id, 5)
     assert job.status == "succeeded", job.error
     assert job.result["transfers"] == 3 and job.result["tips_used"] == 3
@@ -50,17 +50,17 @@ async def test_large_volume_is_split_into_trips():
 async def test_eight_channel_addresses_columns(hub: DeviceHub):
     args = {"source_slot": "3", "source_wells": ["A2"], "destination_slot": "4",
             "destination_wells": ["A1", "A2"], "volume_ul": 10, "pipette": "right", "new_tip": "once"}
-    job = await hub.jobs.wait((await approve_and_call(hub, "lh-1", "transfer", args)).job.id, 5)
+    job = await hub.jobs.wait((await hub.invoke("lh-1", "transfer", args)).job.id, 5)
     assert job.status == "succeeded", job.error
     deck = (await hub.invoke("lh-1", "get_deck")).result
     assert slot(deck, "3")["volumes_ul"]["A2"] == 10000 - 2 * 8 * 10  # all 8 channels share the trough
     assert len(slot(deck, "4")["volumes_ul"]) == 16  # columns 1 and 2, all rows
     assert slot(deck, "2")["tips_remaining"] == 88  # one full column of 20 µL tips
-    with pytest.raises(InvalidArgument, match="first channel"):
+    with pytest.raises(InvalidArgument, match="first nozzle"):
         await hub.invoke("lh-1", "transfer", {**args, "destination_wells": ["B1"]})
 
 
-async def test_impossible_plans_are_refused_before_asking_a_human(hub: DeviceHub):
+async def test_impossible_plans_are_refused_before_anything_moves(hub: DeviceHub):
     base = {"source_slot": "3", "source_wells": ["A1"], "destination_slot": "4", "destination_wells": ["A1"], "pipette": "left"}
     with pytest.raises(InvalidArgument, match="holds 0 of 360 µL; this transfer adds 400"):
         await hub.invoke("lh-1", "transfer", {**base, "volume_ul": 400})
@@ -77,11 +77,10 @@ async def test_impossible_plans_are_refused_before_asking_a_human(hub: DeviceHub
     with pytest.raises(NeedsAttention, match="unused tips"):
         await hub.invoke("lh-1", "transfer", {**base, "destination_wells": [f"{r}{c}" for c in range(1, 13) for r in "ABCDEFGH"] + ["A1"],
                                               "volume_ul": 20})
-    assert hub.confirmations.list() == []
 
 
 async def test_source_volume_is_checked(hub: DeviceHub):
-    await approve_and_call(hub, "lh-1", "load_labware", {"slot": "3", "labware": "generic_12_reservoir_15ml", "volumes_ul": {"A1": 150}})
+    await hub.invoke("lh-1", "load_labware", {"slot": "3", "labware": "generic_12_reservoir_15ml", "volumes_ul": {"A1": 150}})
     with pytest.raises(InvalidArgument, match="holds 150 µL; this transfer needs 200"):
         await hub.invoke("lh-1", "transfer", {"source_slot": "3", "source_wells": ["A1"], "destination_slot": "4",
                                               "destination_wells": ["A1", "A2"], "volume_ul": 100, "pipette": "left"})
@@ -90,8 +89,8 @@ async def test_source_volume_is_checked(hub: DeviceHub):
 async def test_low_level_steps(hub: DeviceHub):
     state = (await hub.invoke("lh-1", "pick_up_tip", {"pipette": "left"})).result
     assert state["tip_attached"] and state["tip_capacity_ul"] == 300
-    await approve_and_call(hub, "lh-1", "aspirate", {"slot": "3", "well": "a1", "volume_ul": 120, "pipette": "left"})
-    state = (await approve_and_call(hub, "lh-1", "dispense", {"slot": "4", "well": "H12", "pipette": "left"})).result
+    await hub.invoke("lh-1", "aspirate", {"slot": "3", "well": "a1", "volume_ul": 120, "pipette": "left"})
+    state = (await hub.invoke("lh-1", "dispense", {"slot": "4", "well": "H12", "pipette": "left"})).result
     assert state["tip_contents_ul"] == 0
     assert (await hub.invoke("lh-1", "get_deck")).result["slots"][3]["volumes_ul"] == {"H12": 120}
     state = (await hub.invoke("lh-1", "drop_tip", {"pipette": "left"})).result
@@ -104,13 +103,13 @@ async def test_stop_mid_transfer_faults_until_reset():
     lh = hub.device("lh-1")
     args = {"source_slot": "3", "source_wells": ["A1"], "destination_slot": "4",
             "destination_wells": ["A1", "A2", "A3", "A4"], "volume_ul": 50, "pipette": "left"}
-    accepted = await approve_and_call(hub, "lh-1", "transfer", args)
+    accepted = await hub.invoke("lh-1", "transfer", args)
     await asyncio.sleep(0.12)
     await hub.invoke("lh-1", "stop", caller="human")
     job = await hub.jobs.wait(accepted.job.id, 5)
     assert job.status == "cancelled"
     assert lh.state is DeviceState.ERROR and lh.describe()["last_error"]["code"] == "interrupted"
-    await approve_and_call(hub, "lh-1", "reset", {})
+    await hub.invoke("lh-1", "reset", {})
     assert lh.state is DeviceState.IDLE
     assert not (await hub.invoke("lh-1", "get_deck")).result["pipettes"][0]["tip_attached"]
     await hub.stop()
@@ -125,11 +124,11 @@ async def test_tips_must_fit_the_pipette(hub: DeviceHub):
 
 
 async def test_serial_dilution_within_one_plate(hub: DeviceHub):
-    await approve_and_call(hub, "lh-1", "load_labware", {"slot": "4", "labware": "corning_96_wellplate_360ul",
+    await hub.invoke("lh-1", "load_labware", {"slot": "4", "labware": "corning_96_wellplate_360ul",
                                                          "initial_volume_ul": 100, "volumes_ul": {"A1": 200}})
     args = {"source_slot": "4", "source_wells": ["A1", "A2", "A3"], "destination_slot": "4",
             "destination_wells": ["A2", "A3", "A4"], "volume_ul": 100, "pipette": "left", "mix_after_cycles": 2}
-    job = await hub.jobs.wait((await approve_and_call(hub, "lh-1", "transfer", args)).job.id, 5)
+    job = await hub.jobs.wait((await hub.invoke("lh-1", "transfer", args)).job.id, 5)
     assert job.status == "succeeded", job.error
     volumes = slot((await hub.invoke("lh-1", "get_deck")).result, "4")["volumes_ul"]
     assert [volumes[w] for w in ("A1", "A2", "A3", "A4")] == [100, 100, 100, 200]
@@ -138,7 +137,7 @@ async def test_serial_dilution_within_one_plate(hub: DeviceHub):
 async def test_reloading_a_tip_rack_resets_tracking(hub: DeviceHub):
     await hub.invoke("lh-1", "pick_up_tip", {"pipette": "left"})
     await hub.invoke("lh-1", "drop_tip", {"pipette": "left"})
-    await approve_and_call(hub, "lh-1", "load_labware", {"slot": "1", "labware": "generic_96_tiprack_300ul"})
+    await hub.invoke("lh-1", "load_labware", {"slot": "1", "labware": "generic_96_tiprack_300ul"})
     assert slot((await hub.invoke("lh-1", "get_deck")).result, "1")["tips_remaining"] == 96
     with pytest.raises(InvalidArgument, match="not liquid"):
         await hub.invoke("lh-1", "load_labware", {"slot": "1", "labware": "generic_96_tiprack_300ul", "initial_volume_ul": 5})

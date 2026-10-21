@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, create
 from .errors import InvalidArgument
 
 # Names the MCP and HTTP layers add next to a capability's own parameters.
-RESERVED_PARAMETERS = frozenset({"confirmation_id", "idempotency_key"})
+RESERVED_PARAMETERS = frozenset({"idempotency_key"})
 # Sub-paths of /devices/{name}/ used by the server itself.
 RESERVED_CAPABILITY_NAMES = frozenset({"reservation", "connect", "disconnect"})
 
@@ -33,8 +33,7 @@ class Within:
 
         volume_ml: Annotated[float, Field(gt=0, description=...), Within(high="max_volume_ml")]
 
-    Checked before a confirmation is requested, so a human is never asked to
-    approve a call that would be refused anyway.
+    Checked on the server before the call runs or a job is created.
     """
 
     low: str | None = None
@@ -47,10 +46,6 @@ class CapabilityMeta:
     description: str
     long_running: bool = False
     """Runs as a background job; callers get a job_id and poll it."""
-    requires_confirmation: bool = False
-    """A human must approve each call (door open, heater on, reagent movement...)."""
-    hazard: str | None = None
-    """Shown to the human who approves the call."""
     read_only: bool = False
     """Only queries the instrument; allowed while the device is busy, faulted or reserved."""
     interrupt: bool = False
@@ -64,8 +59,6 @@ def capability(
     /,
     *,
     long_running: bool = False,
-    requires_confirmation: bool = False,
-    hazard: str | None = None,
     read_only: bool = False,
     interrupt: bool = False,
     allow_in_error: bool = False,
@@ -75,8 +68,8 @@ def capability(
     def decorate(func: Callable[..., Any]) -> Callable[..., Any]:
         if not inspect.iscoroutinefunction(func):
             raise TypeError(f"capability {func.__qualname__} must be an async def")
-        if read_only and (requires_confirmation or long_running):
-            raise TypeError(f"capability {func.__qualname__}: read_only cannot be combined with long_running or requires_confirmation")
+        if read_only and long_running:
+            raise TypeError(f"capability {func.__qualname__}: read_only cannot be combined with long_running")
         description = inspect.getdoc(func) or ""
         if not description:
             raise TypeError(f"capability {func.__qualname__} needs a docstring; agents read it to decide when to call it")
@@ -84,8 +77,6 @@ def capability(
             name=func.__name__,
             description=description,
             long_running=long_running,
-            requires_confirmation=requires_confirmation,
-            hazard=hazard,
             read_only=read_only,
             interrupt=interrupt,
             allow_in_error=allow_in_error,
@@ -179,14 +170,12 @@ class CapabilitySpec:
         except Exception:
             return None
 
-    def describe(self, *, requires_confirmation: bool) -> dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "summary": self.summary,
             "description": self.meta.description,
             "long_running": self.meta.long_running,
-            "requires_confirmation": requires_confirmation,
-            "hazard": self.meta.hazard,
             "read_only": self.meta.read_only,
             "interrupt": self.meta.interrupt,
             "parameters": self.parameters_schema(),

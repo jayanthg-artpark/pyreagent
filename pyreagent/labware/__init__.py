@@ -9,6 +9,7 @@ from typing import Iterable, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from ..core.errors import InvalidArgument, NotFound
+from .opentrons_standard import OPENTRONS_LABWARE
 
 LabwareKind = Literal["plate", "tip_rack", "reservoir", "tube_rack"]
 
@@ -38,7 +39,7 @@ def parse_well(name: str) -> tuple[int, int]:
 
 
 class Labware(BaseModel):
-    id: str = Field(pattern=r"^[a-z0-9_]+$")
+    id: str = Field(pattern=r"^[a-z0-9_.]+$")
     kind: LabwareKind = "plate"
     description: str = ""
     rows: int = Field(gt=0, le=64)
@@ -125,6 +126,8 @@ DEFAULT_CATALOG = LabwareCatalog(
         Labware(id="generic_96_tiprack_20ul", kind="tip_rack", description="Generic 96 tip rack, 20 µL tips", rows=8, columns=12, tip_volume_ul=20),
         Labware(id="generic_96_tiprack_300ul", kind="tip_rack", description="Generic 96 tip rack, 300 µL tips", rows=8, columns=12, tip_volume_ul=300),
         Labware(id="generic_96_tiprack_1000ul", kind="tip_rack", description="Generic 96 tip rack, 1000 µL tips", rows=8, columns=12, tip_volume_ul=1000),
+        # Opentrons standard labware under their load names, so the Opentrons driver can load them directly.
+        *(Labware.model_validate(item) for item in OPENTRONS_LABWARE),
     ]
 )
 

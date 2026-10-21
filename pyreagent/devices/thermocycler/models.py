@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 class ThermalStep(BaseModel):
     temperature_c: float = Field(description="Block temperature for this step, °C.")
     hold_s: float = Field(gt=0, le=24 * 3600, description="Hold time once the block reaches temperature, seconds.")
+    ramp_rate_c_per_s: float | None = Field(
+        default=None, gt=0, le=10, description="Ramp to this step at this rate (°C/s); omit for the instrument's maximum. Needs the ramp_rate feature."
+    )
 
 
 class ThermalStage(BaseModel):

@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Literal
 
+from ....core.errors import NeedsAttention
 from ..backend import ThermocyclerBackend
 from ..models import ThermocyclerStatus
 
@@ -37,6 +38,7 @@ class SimulatedThermocyclerBackend(ThermocyclerBackend):
     vendor = "pyreagent"
     model = "Simulated thermocycler"
     simulated = True
+    features = frozenset({"ramp_rate", "plate_lift"})
 
     def __init__(
         self,
@@ -53,6 +55,8 @@ class SimulatedThermocyclerBackend(ThermocyclerBackend):
         self.block_format = tuple(block_format)  # type: ignore[assignment]
         self.poll_s = poll_s
         self._block = _Ramp(ambient_c, ramp_c_per_s, speedup)
+        self._max_ramp = ramp_c_per_s
+        self.plate_lifted = False
         self._lid = _Ramp(ambient_c, lid_ramp_c_per_s, speedup)
         self._lid_open = False
 
@@ -71,8 +75,14 @@ class SimulatedThermocyclerBackend(ThermocyclerBackend):
     async def lid_is_open(self) -> bool:
         return self._lid_open
 
-    async def set_block_temperature(self, target_c: float) -> None:
+    async def set_block_temperature(self, target_c: float, *, ramp_rate_c_per_s: float | None = None) -> None:
         self._block.set(target_c)
+        self._block.rate = ramp_rate_c_per_s or self._max_ramp
+
+    async def lift_plate(self) -> None:
+        if not self._lid_open:
+            raise NeedsAttention("Open the lid before lifting the plate.", recoverable=True)
+        self.plate_lifted = True
 
     async def set_lid_temperature(self, target_c: float) -> None:
         self._lid.set(target_c)

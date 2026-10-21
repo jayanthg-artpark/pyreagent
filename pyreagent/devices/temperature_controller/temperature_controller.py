@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -27,14 +27,13 @@ class TemperatureController(Device[TemperatureControllerBackend]):
         min_c: float,
         max_c: float,
         poll_interval_s: float = 1.0,
-        confirm: Mapping[str, bool] | None = None,
     ) -> None:
         """
         Args:
             min_c, max_c: Setpoints outside this range are refused (the safe range for
                 this unit *and* the labware used on it, not just the hardware maximum).
         """
-        super().__init__(name, backend, confirm=confirm)
+        super().__init__(name, backend)
         self.min_c = min_c
         self.max_c = max_c
         self.poll_interval_s = poll_interval_s
@@ -42,7 +41,7 @@ class TemperatureController(Device[TemperatureControllerBackend]):
     def limits(self) -> dict[str, Any]:
         return {"min_c": self.min_c, "max_c": self.max_c}
 
-    @capability(requires_confirmation=True, hazard="Turns on heating/cooling; the unit and its contents will get hot or cold.")
+    @capability
     async def set_temperature(
         self,
         target_c: Annotated[float, Field(description="Setpoint in °C, within limits.min_c .. limits.max_c."), Within("min_c", "max_c")],

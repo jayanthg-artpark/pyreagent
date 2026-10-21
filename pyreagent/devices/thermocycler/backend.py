@@ -12,7 +12,7 @@ import asyncio
 from typing import Any, Awaitable, Callable, Literal
 
 from ...core.backend import Backend
-from ...core.errors import HardwareError
+from ...core.errors import HardwareError, NotSupported
 from .models import ThermalProfile, ThermalStep, ThermocyclerStatus
 
 Progress = Callable[[float, str], None]
@@ -24,6 +24,8 @@ class ThermocyclerBackend(Backend):
     """Rows and columns of the block."""
     poll_s: float = 0.5
     ramp_timeout_s: float = 600.0
+    features: frozenset[str] = frozenset()
+    """Optional: "ramp_rate" (per-step ramp rates), "plate_lift" (lift_plate)."""
 
     @abc.abstractmethod
     async def open_lid(self) -> None: ...
@@ -35,7 +37,7 @@ class ThermocyclerBackend(Backend):
     async def lid_is_open(self) -> bool: ...
 
     @abc.abstractmethod
-    async def set_block_temperature(self, target_c: float) -> None: ...
+    async def set_block_temperature(self, target_c: float, *, ramp_rate_c_per_s: float | None = None) -> None: ...
 
     @abc.abstractmethod
     async def set_lid_temperature(self, target_c: float) -> None: ...
@@ -52,6 +54,10 @@ class ThermocyclerBackend(Backend):
     async def deactivate(self) -> None:
         await self.deactivate_block()
         await self.deactivate_lid()
+
+    async def lift_plate(self) -> None:
+        """Raise the plate off the block (frees a stuck plate before a gripper or human removes it)."""
+        raise NotSupported(f"{type(self).__name__} cannot lift the plate.")
 
     async def hold(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
@@ -78,7 +84,7 @@ class ThermocyclerBackend(Backend):
             for cycle in range(1, stage.repeat + 1):
                 for step in stage.steps:
                     progress(done / total, f"stage {s}/{len(profile.stages)}, cycle {cycle}/{stage.repeat}: {step.temperature_c:g} °C")
-                    await self.set_block_temperature(step.temperature_c)
+                    await self.set_block_temperature(step.temperature_c, ramp_rate_c_per_s=step.ramp_rate_c_per_s)
                     await self.wait_for("block", step.temperature_c)
                     await self.hold(step.hold_s)
                     if after_step is not None:
@@ -91,4 +97,4 @@ class ThermocyclerBackend(Backend):
         return done
 
     def info(self) -> dict[str, Any]:
-        return {**super().info(), "block_format": list(self.block_format)}
+        return {**super().info(), "block_format": list(self.block_format), "features": sorted(self.features)}

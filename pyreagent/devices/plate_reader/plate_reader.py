@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Mapping
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -26,9 +26,8 @@ class PlateReader(Device[PlateReaderBackend]):
         backend: PlateReaderBackend,
         *,
         labware: LabwareCatalog | None = None,
-        confirm: Mapping[str, bool] | None = None,
     ) -> None:
-        super().__init__(name, backend, confirm=confirm)
+        super().__init__(name, backend)
         self.labware = labware or DEFAULT_CATALOG
 
     def limits(self) -> dict[str, Any]:
@@ -70,7 +69,7 @@ class PlateReader(Device[PlateReaderBackend]):
         )
         return AbsorbanceRead(plate=plate, wavelength_nm=wavelength_nm, values=values, read_at=utcnow())
 
-    @capability(requires_confirmation=True, hazard="Opens the plate tray; keep hands and objects clear of it.")
+    @capability
     async def open_tray(self) -> PlateReaderStatus:
         """Open the plate tray so a plate can be loaded or removed."""
         await self.backend.open_tray()

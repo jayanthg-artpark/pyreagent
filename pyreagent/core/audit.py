@@ -21,8 +21,7 @@ from .jobs import utcnow
 class AuditRecord(BaseModel):
     ts: datetime = Field(default_factory=utcnow)
     event: str
-    """invoke | job_finished | confirmation_requested | confirmation_approved |
-    confirmation_rejected | reserve | release | connect | disconnect"""
+    """invoke | job_finished | cancel | reserve | release | connect | disconnect"""
     caller: str
     device: str | None = None
     capability: str | None = None
@@ -32,7 +31,6 @@ class AuditRecord(BaseModel):
     result: Any = None
     error: dict[str, Any] | None = None
     job_id: str | None = None
-    confirmation_id: str | None = None
     duration_ms: float | None = None
 
 

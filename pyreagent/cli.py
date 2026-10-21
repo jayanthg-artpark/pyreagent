@@ -20,7 +20,8 @@ def _serve(config: Path, host: str | None, port: int | None, log_level: str) -> 
     port = port or settings.port
     if settings.operator_token is None:
         logging.getLogger("pyreagent").warning(
-            "No operator token set (%s): anyone who can reach this server can approve confirmations.",
+            "No operator token set (%s): anyone who can reach this server can connect/disconnect devices "
+            "and force-release reservations.",
             settings.operator_token_env,
         )
     app = create_app(
@@ -54,6 +55,9 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("drivers", help="List device types and the brands with drivers for each.")
 
+    discover = sub.add_parser("discover", help="Find Opentrons robots on the local network (needs zeroconf).")
+    discover.add_argument("--timeout", type=float, default=3.0)
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(levelname)s %(name)s: %(message)s")
 
@@ -73,6 +77,16 @@ def main(argv: list[str] | None = None) -> None:
 
         for device_type, brands in available_drivers().items():
             print(f"{device_type}: {', '.join(brands)}")
+    elif args.command == "discover":
+        import asyncio
+
+        from .vendors.opentrons.discovery import discover as find_robots
+
+        robots = asyncio.run(find_robots(args.timeout))
+        for robot in robots:
+            print(f"{robot.name}  {robot.robot}  http://{robot.host}:{robot.port}")
+        if not robots:
+            print("No Opentrons robots found.")
 
 
 if __name__ == "__main__":
