@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-labelledby="title desc">
+  <title id="title">pyreagent</title>
+  <desc id="desc">Instrument drivers AI agents can operate safely: HTTP and OpenAPI, MCP tools, human approval, simulation. Illustrated with a 96-well plate.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08111F"/>
+      <stop offset="1" stop-color="#0E2440"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="1010" cy="160" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#14B8A6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#14B8A6" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#FFFFFF" stroke-opacity="0.035"/>
+    </pattern>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="card"><rect width="1280" height="320" rx="20"/></clipPath>
+    <style>
+      .sans { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; }
+      .mono { font-family: 'Cascadia Code', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
+      .eyebrow { font-size: 15px; font-weight: 600; letter-spacing: 3px; fill: #5EEAD4; }
+      .word { font-size: 84px; font-weight: 700; fill: #F8FAFC; }
+      .word-accent { fill: #2DD4BF; }
+      .tagline { font-size: 22px; fill: #CBD5E1; }
+      .chip { fill: #0F2A44; stroke: #2B5B84; stroke-width: 1.2; }
+      .chip-text { font-size: 14.5px; font-weight: 600; fill: #E2E8F0; }
+      .plate { fill: #0F1F36; stroke: #2B4C78; stroke-width: 1.5; }
+      .plate-inner { fill: none; stroke: #1C3557; stroke-width: 1; }
+      .well { fill: #0A1628; stroke: #2A4A75; stroke-width: 1.2; }
+      .axis { font-size: 10px; font-weight: 600; fill: #5B7BA6; }
+      .pulse { animation: pulse 3.2s ease-in-out infinite; }
+      .d1 { animation-delay: 0.8s; } .d2 { animation-delay: 1.6s; } .d3 { animation-delay: 2.4s; }
+      @keyframes pulse { 0%, 100% { fill-opacity: 0.45; } 50% { fill-opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+    </style>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="320" fill="url(#bg)"/>
+    <rect width="1280" height="320" fill="url(#grid)"/>
+    <rect width="1280" height="320" fill="url(#halo)"/>
+  </g>
+  <g class="sans">
+    <text x="72" y="84" class="eyebrow">AGENT-SAFE LAB AUTOMATION</text>
+    <text x="68" y="168" class="word mono"><tspan class="word-accent">py</tspan>reagent</text>
+    <text x="72" y="222" class="tagline">Instrument drivers AI agents can operate safely.</text>
+    <rect x="72" y="248" width="150" height="34" rx="17" class="chip"/><text x="147.0" y="270" class="chip-text" text-anchor="middle">HTTP + OpenAPI</text><rect x="232" y="248" width="112" height="34" rx="17" class="chip"/><text x="288.0" y="270" class="chip-text" text-anchor="middle">MCP tools</text><rect x="354" y="248" width="150" height="34" rx="17" class="chip"/><text x="429.0" y="270" class="chip-text" text-anchor="middle">Human approval</text><rect x="514" y="248" width="118" height="34" rx="17" class="chip"/><text x="573.0" y="270" class="chip-text" text-anchor="middle">Simulation</text>
+  </g>
+  <g class="sans">
+    <rect x="812" y="44" width="396" height="232" rx="16" class="plate"/>
+    <rect x="819" y="51" width="382" height="218" rx="11" class="plate-inner"/>
+    <text x="862" y="74" class="axis" text-anchor="middle">1</text><text x="891" y="74" class="axis" text-anchor="middle">2</text><text x="920" y="74" class="axis" text-anchor="middle">3</text><text x="949" y="74" class="axis" text-anchor="middle">4</text><text x="978" y="74" class="axis" text-anchor="middle">5</text><text x="1007" y="74" class="axis" text-anchor="middle">6</text><text x="1036" y="74" class="axis" text-anchor="middle">7</text><text x="1065" y="74" class="axis" text-anchor="middle">8</text><text x="1094" y="74" class="axis" text-anchor="middle">9</text><text x="1123" y="74" class="axis" text-anchor="middle">10</text><text x="1152" y="74" class="axis" text-anchor="middle">11</text><text x="1181" y="74" class="axis" text-anchor="middle">12</text>
+    <text x="842" y="95.5" class="axis" text-anchor="middle">A</text><text x="842" y="119.5" class="axis" text-anchor="middle">B</text><text x="842" y="143.5" class="axis" text-anchor="middle">C</text><text x="842" y="167.5" class="axis" text-anchor="middle">D</text><text x="842" y="191.5" class="axis" text-anchor="middle">E</text><text x="842" y="215.5" class="axis" text-anchor="middle">F</text><text x="842" y="239.5" class="axis" text-anchor="middle">G</text><text x="842" y="263.5" class="axis" text-anchor="middle">H</text>
+    <circle cx="862" cy="92" r="9" fill="#2DD4BF" fill-opacity="1.00"/><circle cx="891" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.82"/><circle cx="920" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.66"/><circle cx="949" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.52"/><circle cx="978" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.40"/><circle cx="1007" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.30"/><circle cx="1036" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.22"/><circle cx="1065" cy="92" r="9" fill="#2DD4BF" fill-opacity="0.15"/><circle cx="1094" cy="92" r="9" class="well"/><circle cx="1123" cy="92" r="9" class="well"/><circle cx="1152" cy="92" r="9" class="well"/><circle cx="1181" cy="92" r="9" fill="#60A5FA" fill-opacity="1.00"/><circle cx="862" cy="116" r="9" fill="#22D3EE" fill-opacity="1.00"/><circle cx="891" cy="116" r="9" fill="#22D3EE" fill-opacity="0.82"/><circle cx="920" cy="116" r="9" fill="#22D3EE" fill-opacity="0.66"/><circle cx="949" cy="116" r="9" fill="#22D3EE" fill-opacity="0.52"/><circle cx="978" cy="116" r="9" fill="#22D3EE" fill-opacity="0.40"/><circle cx="1007" cy="116" r="9" fill="#22D3EE" fill-opacity="0.30"/><circle cx="1036" cy="116" r="9" fill="#22D3EE" fill-opacity="0.22"/><circle cx="1065" cy="116" r="9" fill="#22D3EE" fill-opacity="0.15"/><circle cx="1094" cy="116" r="9" class="well"/><circle cx="1123" cy="116" r="9" class="well"/><circle cx="1152" cy="116" r="9" class="well"/><circle cx="1181" cy="116" r="9" fill="#60A5FA" fill-opacity="0.90"/><circle cx="862" cy="140" r="9" class="well"/><circle cx="891" cy="140" r="9" class="well"/><circle cx="920" cy="140" r="9" class="well"/><circle cx="949" cy="140" r="9" class="well"/><circle cx="978" cy="140" r="9" class="well"/><circle cx="1007" cy="140" r="9" class="well"/><circle cx="1036" cy="140" r="9" class="well"/><circle cx="1065" cy="140" r="9" class="well"/><circle cx="1094" cy="140" r="9" class="well"/><circle cx="1123" cy="140" r="9" class="well"/><circle cx="1152" cy="140" r="9" class="well"/><circle cx="1181" cy="140" r="9" fill="#60A5FA" fill-opacity="0.80"/><circle cx="862" cy="164" r="9" class="well"/><circle cx="891" cy="164" r="9" class="well"/><circle cx="920" cy="164" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d0"/><circle cx="949" cy="164" r="9" class="well"/><circle cx="978" cy="164" r="9" class="well"/><circle cx="1007" cy="164" r="9" class="well"/><circle cx="1036" cy="164" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d1"/><circle cx="1065" cy="164" r="9" class="well"/><circle cx="1094" cy="164" r="9" class="well"/><circle cx="1123" cy="164" r="9" class="well"/><circle cx="1152" cy="164" r="9" class="well"/><circle cx="1181" cy="164" r="9" fill="#60A5FA" fill-opacity="0.70"/><circle cx="862" cy="188" r="9" class="well"/><circle cx="891" cy="188" r="9" class="well"/><circle cx="920" cy="188" r="9" class="well"/><circle cx="949" cy="188" r="9" class="well"/><circle cx="978" cy="188" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d2"/><circle cx="1007" cy="188" r="9" class="well"/><circle cx="1036" cy="188" r="9" class="well"/><circle cx="1065" cy="188" r="9" class="well"/><circle cx="1094" cy="188" r="9" class="well"/><circle cx="1123" cy="188" r="9" class="well"/><circle cx="1152" cy="188" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d2"/><circle cx="1181" cy="188" r="9" fill="#60A5FA" fill-opacity="0.60"/><circle cx="862" cy="212" r="9" class="well"/><circle cx="891" cy="212" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d3"/><circle cx="920" cy="212" r="9" class="well"/><circle cx="949" cy="212" r="9" class="well"/><circle cx="978" cy="212" r="9" class="well"/><circle cx="1007" cy="212" r="9" class="well"/><circle cx="1036" cy="212" r="9" class="well"/><circle cx="1065" cy="212" r="9" class="well"/><circle cx="1094" cy="212" r="9" class="well"/><circle cx="1123" cy="212" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d0"/><circle cx="1152" cy="212" r="9" class="well"/><circle cx="1181" cy="212" r="9" fill="#60A5FA" fill-opacity="0.50"/><circle cx="862" cy="236" r="9" class="well"/><circle cx="891" cy="236" r="9" class="well"/><circle cx="920" cy="236" r="9" class="well"/><circle cx="949" cy="236" r="9" class="well"/><circle cx="978" cy="236" r="9" class="well"/><circle cx="1007" cy="236" r="9" class="well"/><circle cx="1036" cy="236" r="9" class="well"/><circle cx="1065" cy="236" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d1"/><circle cx="1094" cy="236" r="9" class="well"/><circle cx="1123" cy="236" r="9" class="well"/><circle cx="1152" cy="236" r="9" class="well"/><circle cx="1181" cy="236" r="9" fill="#60A5FA" fill-opacity="0.40"/><circle cx="862" cy="260" r="9" class="well"/><circle cx="891" cy="260" r="9" class="well"/><circle cx="920" cy="260" r="9" class="well"/><circle cx="949" cy="260" r="9" fill="#FBBF24" fill-opacity="1.00" filter="url(#glow)" class="pulse d3"/><circle cx="978" cy="260" r="9" class="well"/><circle cx="1007" cy="260" r="9" class="well"/><circle cx="1036" cy="260" r="9" class="well"/><circle cx="1065" cy="260" r="9" class="well"/><circle cx="1094" cy="260" r="9" class="well"/><circle cx="1123" cy="260" r="9" class="well"/><circle cx="1152" cy="260" r="9" class="well"/><circle cx="1181" cy="260" r="9" fill="#60A5FA" fill-opacity="0.30"/>
+  </g>
+</svg>
