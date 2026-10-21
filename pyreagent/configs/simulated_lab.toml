@@ -1,0 +1,71 @@
+# One simulated device of every type. `pyreagent demo` serves this file.
+
+[server]
+name = "simulated-lab"
+port = 8000
+
+[[devices]]
+name = "balance-1"
+type = "balance"
+driver = "simulated"
+driver_options = { capacity_g = 220.0, readability_g = 0.0001 }
+
+[[devices]]
+name = "pump-1"
+type = "pump"
+driver = "simulated"
+driver_options = { speedup = 10.0 }
+options = { max_volume_ml = 10.0, min_rate_ml_min = 0.01, max_rate_ml_min = 20.0 }
+
+[[devices]]
+name = "reader-1"
+type = "plate_reader"
+driver = "simulated"
+driver_options = { seconds_per_well = 0.02 }
+
+[[devices]]
+name = "heater-1"
+type = "temperature_controller"
+driver = "simulated"
+driver_options = { tau_s = 10.0 }
+options = { min_c = 4.0, max_c = 95.0 }
+
+[[devices]]
+name = "shaker-1"
+type = "shaker"
+driver = "simulated"
+options = { min_rpm = 100, max_rpm = 3000 }
+
+[[devices]]
+name = "lh-1"
+type = "liquid_handler"
+driver = "simulated"
+driver_options = { seconds_per_operation = 0.2, pipettes = [
+  { name = "left", channels = 1, min_volume_ul = 20, max_volume_ul = 300 },
+  { name = "right", channels = 8, min_volume_ul = 1, max_volume_ul = 20 },
+] }
+
+[devices.options.deck]
+"1" = "generic_96_tiprack_300ul"
+"2" = "generic_96_tiprack_20ul"
+"3" = { labware = "generic_12_reservoir_15ml", initial_volume_ul = 12000 }
+"4" = { labware = "corning_96_wellplate_360ul", initial_volume_ul = 0 }
+
+[[devices]]
+name = "pcr-1"
+type = "thermocycler"
+driver = "simulated"
+driver_options = { speedup = 60.0 }        # a 1 h program finishes in a minute
+options = { min_c = 4.0, max_c = 99.0, max_lid_c = 110.0 }
+
+[[devices]]
+name = "qpcr-1"
+type = "qpcr"
+driver = "simulated"
+driver_options = { speedup = 60.0, channels = ["FAM", "HEX", "ROX", "Cy5"] }
+
+[[devices]]
+name = "washer-1"
+type = "plate_washer"
+driver = "simulated"
+driver_options = { buffers = { A = 2000.0, B = 1000.0 }, waste_capacity_ml = 4000.0, seconds_per_column = 0.1 }

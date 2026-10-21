@@ -1,0 +1,42 @@
+# Example device server for a bench with real instruments.
+#   pyreagent serve examples/bench.toml
+# Set PYREAGENT_OPERATOR_TOKEN in the environment so only humans can approve gated actions.
+
+[server]
+name = "bench-1"
+host = "0.0.0.0"
+port = 8000
+public_url = "http://bench-1.local:8000"      # what other machines use to reach this server
+registry_url = "http://registry.local:9000"   # remove if you are not running `pyreagent registry`
+audit_log = "logs/bench-1.audit.jsonl"
+mcp_allowed_hosts = ["localhost:*", "127.0.0.1:*", "bench-1.local:*"]
+
+# Labware the plate reader should accept, in addition to the built-in catalog.
+[[labware]]
+id = "lab_96_deepwell"
+description = "In-house 96 deep-well plate"
+rows = 8
+columns = 12
+well_volume_ul = 2000
+
+[[devices]]
+name = "balance-1"
+type = "balance"
+driver = "mettler_toledo"                     # pyreagent/devices/balance/mettler_toledo/
+driver_options = { port = "COM3", baudrate = 9600 }
+
+[[devices]]
+name = "syringe-1"
+type = "pump"
+driver = "new_era"                            # pyreagent/devices/pump/new_era/
+# Inside diameter from your syringe maker's table; it sets the volume calibration.
+driver_options = { port = "COM4", syringe_diameter_mm = 14.43, address = 0 }
+options = { max_volume_ml = 10.0, min_rate_ml_min = 0.001, max_rate_ml_min = 20.0 }
+# Every dispense/withdraw needs human approval by default. Once a protocol is
+# validated you can relax that here; the override shows in GET /devices.
+# confirm = { dispense = false, withdraw = false }
+
+[[devices]]
+name = "reader-1"
+type = "plate_reader"
+driver = "simulated"                          # until a real plate reader driver exists

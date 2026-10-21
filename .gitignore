@@ -1,0 +1,16 @@
+# Reference checkouts (e.g. PyLabRobot) — read-only, never part of pyreagent
+_reference/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime output
+*.jsonl
