@@ -143,6 +143,22 @@ async def test_redeclared_slot_moves_old_labware_off_deck():
     await hub.stop()
 
 
+async def test_robot_is_homed_after_the_run_is_released():
+    robot = FakeOpentronsRobot()
+    hub = await start(robot)
+    assert (await run_job(hub, "transfer", transfer_args()))["status"] == "succeeded"
+    assert robot.robot_homes == []
+    await hub.stop()
+    assert robot.current is None and robot.robot_homes == [None]  # released first, then homed
+
+
+async def test_homing_after_the_run_can_be_turned_off():
+    robot = FakeOpentronsRobot()
+    hub = await start(robot, home_after_run=False)
+    await hub.stop()
+    assert robot.current is None and robot.robot_homes == []
+
+
 async def test_slow_commands_are_polled():
     robot = FakeOpentronsRobot(running_polls=1)
     hub = await start(robot)  # the first loadPipette comes back "running" and is polled to completion

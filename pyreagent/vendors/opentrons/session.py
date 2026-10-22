@@ -6,6 +6,7 @@ on a module is loaded relative to the module's id in that run. A session is
 shared by every device configured with the same robot address. It creates the
 run when the first device connects and releases it when the last disconnects.
 
+When the last device disconnects, the run is released and the robot homed.
 If the run is stopped (``stop``, or the E-stop), the next device that connects
 or resets starts a fresh run; ``generation`` increases and every device reloads
 its own pipettes/modules into the new run before its next command.
@@ -91,6 +92,8 @@ class OpentronsSession:
         self.robot = robot
         self.client = OpentronsClient(host, port=port, headers=headers, transport=transport)
         self.command_timeout_s = 300.0
+        self.home_after_run = True
+        """Home every axis when the last device disconnects, so the robot is never left parked mid-deck."""
         self.run_id: str | None = None
         self.generation = 0
         self.stopped = False
@@ -116,7 +119,7 @@ class OpentronsSession:
         async with self._lock:
             self.users.discard(user)
             if not self.users:
-                await self._end_run()
+                await self._end_run(home=self.home_after_run)
                 await self.client.close()
 
     async def _start_run(self) -> None:
@@ -147,7 +150,7 @@ class OpentronsSession:
         self.stopped = False
         self.generation += 1
 
-    async def _end_run(self) -> None:
+    async def _end_run(self, *, home: bool = False) -> None:
         run_id, self.run_id = self.run_id, None
         if run_id is None:
             return
@@ -160,6 +163,11 @@ class OpentronsSession:
             await self.client.release_run(run_id)
         except Exception as exc:  # the robot stays busy for the Opentrons App until the run is released
             log.warning("could not release run %s on %s: %s", run_id, self.client.base_url, exc)
+        if home:
+            try:
+                await self.client.home_robot()
+            except Exception as exc:  # e.g. the E-stop is engaged: a human has to home it
+                log.warning("could not home %s after the run: %s", self.client.base_url, exc)
 
     async def stop(self) -> None:
         """Halt the robot: stops the run for every device on it."""

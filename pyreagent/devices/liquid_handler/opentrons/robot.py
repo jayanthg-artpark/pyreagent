@@ -82,6 +82,7 @@ class OpentronsBackend(LiquidHandlerBackend):
         dispense_height_mm: float = 1.0,
         verify_tips: bool = True,
         use_stored_offsets: bool = True,
+        home_after_run: bool = True,
         command_timeout_s: float = 300.0,
         headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -101,11 +102,13 @@ class OpentronsBackend(LiquidHandlerBackend):
             aspirate_height_mm, dispense_height_mm: Tip height above the well bottom.
             verify_tips: On a Flex, check with the tip sensors that pickups and drops really happened.
             use_stored_offsets: Apply the Labware Position Check offsets saved on the robot (software 8.4+).
+            home_after_run: Home the gantry and pipettes when the robot is released (the last device on it disconnects).
             headers: Extra HTTP headers, e.g. an ``Authorization`` token if the robot requires one.
             transport: Inject an httpx transport (tests use a fake robot).
         """
         self.session = OpentronsSession.get(host=host, robot=robot, port=port, robot_name=robot_name, headers=headers, transport=transport)
         self.session.command_timeout_s = command_timeout_s
+        self.session.home_after_run = home_after_run
         self.robot = robot
         self._trash_option = trash
         self.trash = trash or ROBOTS[robot]["trash"]

@@ -287,7 +287,9 @@ uses the offset saved for that labware in that slot, else the labware's default 
   the devices stay `offline` with `needs_attention`.
 - **Labware on a module.** Labware in a module's slot is loaded onto the module. Slots a module covers, such
   as OT-2 slots 8, 10 and 11 under the Thermocycler, are refused.
-- **Homing.** Call `home` after the robot powers up. Until then, motions fail with `needs_attention`.
+- **Homing.** Call `home` after the robot powers up. Until then, motions fail with `needs_attention`. When the
+  last device on a robot disconnects, the run is released and the gantry and pipettes are homed
+  (`home_after_run = false` to leave them where they are).
 - **Stopping.** `stop` halts the whole robot. Devices that were moving go to `error`. The next `reset` starts a
   fresh run, and every device on the robot reloads into it automatically.
 - **Labware names.** Declare labware by its Opentrons load name. The 36 most common Opentrons labware are in

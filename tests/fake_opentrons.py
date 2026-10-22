@@ -98,6 +98,8 @@ class FakeOpentronsRobot:
         """GET /labwareOffsets; None = older software without the endpoint (404)."""
         self.max_versions: dict[str, int] = {}
         """Load name -> newest definition version this robot has (default: any)."""
+        self.robot_homes: list[str | None] = []
+        """POST /robot/home calls: the run that was current at the time (None = released)."""
         self.lights = False
         self.liquid_heights: dict[str, float | None] = {}
         """Well name -> liquid height above the bottom reported by tryLiquidProbe (default 5.0; None = no liquid)."""
@@ -142,6 +144,11 @@ class FakeOpentronsRobot:
             if self.model != "OT-3 Standard":
                 return _error(404, "NotFound", "deck configuration is Flex-only")
             return httpx.Response(200, json={"data": {"cutoutFixtures": self.deck_fixtures, "lastModifiedAt": None}})
+        if (method, parts) == ("POST", ["robot", "home"]):
+            assert body == {"target": "robot"}
+            self.robot_homes.append(self.current)
+            self.homed = True
+            return httpx.Response(200, json={"message": "Homing robot."})
         if (method, parts) == ("GET", ["labwareOffsets"]):
             if self.stored_offsets is None:
                 return _error(404, "NotFound", "Not Found")

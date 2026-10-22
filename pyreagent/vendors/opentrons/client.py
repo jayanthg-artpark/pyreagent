@@ -16,6 +16,7 @@ Endpoints used (robot-server, API version header ``Opentrons-Version: *``):
     POST  /runs/{id}/actions            {"actionType": "stop"}
     GET   /runs/{id}                    run status: wait for "stopped" before releasing
     PATCH /runs/{id}                    {"current": false} releases the robot
+    POST  /robot/home                   {"target": "robot"}: home every axis once the run is released
 """
 
 from __future__ import annotations
@@ -153,6 +154,10 @@ class OpentronsClient:
 
     async def release_run(self, run_id: str) -> None:
         await self._request("PATCH", f"/runs/{run_id}", json={"data": {"current": False}})
+
+    async def home_robot(self, *, timeout_s: float = 120.0) -> None:
+        """Home every axis (gantry, mounts, plungers); needs no run, so it also works after a stop."""
+        await self._request("POST", "/robot/home", json={"target": "robot"}, timeout_s=timeout_s)
 
     async def wait_for_run_end(self, run_id: str, *, timeout_s: float = 30.0) -> str:
         """Wait until a stop has taken effect; the robot refuses to release a run while it is ``stop-requested``."""
