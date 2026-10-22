@@ -68,9 +68,9 @@ async def test_transfer_becomes_opentrons_commands():
     loads = [c["params"] for c in robot.sent if c["commandType"] == "loadLabware"]
     assert [(p["location"]["slotName"], p["loadName"], p["namespace"], p["version"]) for p in loads] == [
         ("1", "opentrons_96_tiprack_300ul", "opentrons", 1),
-        ("3", "nest_12_reservoir_15ml", "opentrons", 1),
-        ("4", "corning_96_wellplate_360ul_flat", "opentrons", 1),
-    ]  # each loaded once, on first use
+        ("3", "nest_12_reservoir_15ml", "opentrons", 3),
+        ("4", "corning_96_wellplate_360ul_flat", "opentrons", 5),
+    ]  # each loaded once, on first use, in the version Opentrons loads by default
     aspirate = next(c["params"] for c in robot.sent if c["commandType"] == "aspirate")
     assert aspirate["wellName"] == "A1" and aspirate["volume"] == 50
     assert aspirate["wellLocation"] == {"origin": "bottom", "offset": {"x": 0, "y": 0, "z": 1.0}}
@@ -160,7 +160,7 @@ async def test_stop_mid_transfer_faults_and_reset_starts_a_new_run():
     await hub.invoke("ot-1", "stop", caller="human")
     assert (await hub.jobs.wait(accepted.job.id, 5)).status == "cancelled"
     assert hub.device("ot-1").state is DeviceState.ERROR
-    assert robot.runs[first_run]["status"] == "stopped"
+    assert robot.runs[first_run]["status"] in ("stop-requested", "stopped")
     await hub.invoke("ot-1", "reset", {})
     assert hub.device("ot-1").state is DeviceState.IDLE
     assert robot.current != first_run and robot.runs[first_run]["current"] is False

@@ -1,11 +1,14 @@
 """Generate pyreagent/labware/opentrons_standard.py from Opentrons labware definitions.
 
 The ids are Opentrons load names, so the Opentrons driver can load them as-is.
-Geometry (grid, well and tip volumes) comes from Opentrons' shared-data
-definitions (Apache-2.0). Fetch them first:
+Each entry is the definition version Opentrons' Protocol API loads by default at
+its newest API level (``_default_labware_versions.py``). Labware Position Check
+offsets stored on a robot are per version, so the driver loads the same one.
+Geometry (grid, well and tip volumes) comes from that version's shared-data
+definition (Apache-2.0). Fetch them first, at the release tag your robots run:
 
-    git clone --depth 1 --filter=blob:none --sparse https://github.com/Opentrons/opentrons.git _reference/opentrons
-    git -C _reference/opentrons sparse-checkout set --no-cone "/shared-data/labware/definitions/2/*/1.json"
+    git clone --depth 1 --branch v10.1.0 --filter=blob:none --sparse https://github.com/Opentrons/opentrons.git _reference/opentrons
+    git -C _reference/opentrons sparse-checkout set --no-cone "/shared-data/labware/definitions/2/*"         "/api/src/opentrons/protocol_api/core/engine/_default_labware_versions.py"
     python scripts/gen_opentrons_labware.py
 """
 
@@ -18,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFINITIONS = ROOT / "_reference" / "opentrons" / "shared-data" / "labware" / "definitions" / "2"
+DEFAULT_VERSIONS = ROOT / "_reference" / "opentrons" / "api" / "src" / "opentrons" / "protocol_api" / "core" / "engine" / "_default_labware_versions.py"
 OUT = ROOT / "pyreagent" / "labware" / "opentrons_standard.py"
 
 LOAD_NAMES = [
@@ -46,17 +50,31 @@ sys.path.insert(0, str(ROOT))
 from pyreagent.vendors.opentrons.labware import labware_fields  # noqa: E402
 
 
-def entry(load_name: str) -> dict:
-    versions = sorted((DEFINITIONS / load_name).glob("*.json"), key=lambda p: int(p.stem))
-    if not versions:
-        raise SystemExit(f"missing definition for {load_name} under {DEFINITIONS}")
-    return labware_fields(json.loads(versions[-1].read_text(encoding="utf-8")))
+def default_versions() -> dict[str, int]:
+    """Load name -> default version at the newest API level (versions not listed there default to 1)."""
+    source = DEFAULT_VERSIONS.read_text(encoding="utf-8").replace(
+        "from opentrons.protocols.api_support.types import APIVersion", "")
+    namespace: dict = {"APIVersion": lambda major, minor: (major, minor)}
+    exec(source, namespace)
+    versions: dict[str, int] = {}
+    for _, table in sorted(namespace["DEFAULT_LABWARE_VERSIONS"].items()):
+        versions.update(table)
+    return versions
+
+
+def entry(load_name: str, version: int) -> dict:
+    path = DEFINITIONS / load_name / f"{version}.json"
+    if not path.exists():
+        raise SystemExit(f"missing definition {path}")
+    return labware_fields(json.loads(path.read_text(encoding="utf-8")))
 
 
 def main() -> None:
     commit = subprocess.run(["git", "-C", str(DEFINITIONS), "log", "-1", "--format=%h %cs"],
                             capture_output=True, text=True).stdout.strip() or "unknown"
-    items = [entry(name) for name in LOAD_NAMES]
+    defaults = default_versions()
+    versions = {name: defaults.get(name, 1) for name in LOAD_NAMES}
+    items = [entry(name, versions[name]) for name in LOAD_NAMES]
     lines = [
         '"""Opentrons standard labware, ids = Opentrons load names.',
         "",
@@ -69,6 +87,11 @@ def main() -> None:
         "OPENTRONS_LABWARE: list[dict[str, object]] = [",
         *(f"    {item!r}," for item in items),
         "]",
+        "",
+        "# Definition version to load: what Opentrons loads by default, so stored labware offsets match.",
+        "OPENTRONS_VERSIONS: dict[str, int] = {",
+        *(f"    {name!r}: {version}," for name, version in versions.items() if version != 1),
+        "}",
         "",
     ]
     OUT.write_text("\n".join(lines), encoding="utf-8")

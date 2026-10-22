@@ -197,6 +197,64 @@ async def test_flex_waste_chute_when_no_trash_bin():
     await hub.stop()
 
 
+# -- labware versions and stored Labware Position Check offsets ---------------------------------------
+
+def stored(uri: str, vector: tuple[float, float, float], location: str | None = None, created: str = "2026-05-08T00:00:00Z") -> dict:
+    sequence = [{"kind": "onAddressableArea", "addressableAreaName": location}] if location else "anyLocation"
+    return {"id": f"{uri}@{location}@{created}", "createdAt": created, "definitionUri": uri, "locationSequence": sequence,
+            "vector": dict(zip("xyz", vector))}
+
+
+async def test_flex_applies_stored_offsets_like_the_app():
+    robot = flex_robot()
+    robot.stored_offsets = [
+        stored("opentrons/opentrons_flex_96_tiprack_50ul/1", (0, 0, 0), created="2025-12-22T00:00:00Z"),
+        stored("opentrons/opentrons_flex_96_tiprack_50ul/1", (0.4, 0.4, 0)),               # newer default wins
+        stored("opentrons/nest_12_reservoir_15ml/3", (0, 0, 0.3)),
+        stored("opentrons/nest_12_reservoir_15ml/3", (0, 0, 0.5), location="C1"),          # slot-specific wins in C1
+        stored("opentrons/nest_96_wellplate_2ml_deep/1", (9, 9, 9)),                       # another version: ignored
+    ]
+    hub = await start(robot, robot_type="flex")
+    args = {"source_slot": "C1", "source_wells": ["A1"], "destination_slot": "D1", "destination_wells": ["A1"],
+            "volume_ul": 20, "pipette": "right"}
+    assert (await job(hub, "ot", "transfer", args))["status"] == "succeeded"
+    assert {p["loadName"]: p["version"] for p in sent(robot, "loadLabware")} == {
+        "opentrons_flex_96_tiprack_50ul": 1, "nest_12_reservoir_15ml": 3, "nest_96_wellplate_2ml_deep": 5}
+    run = robot.runs[robot.current]
+    assert {o["location"]["slotName"]: o["vector"] for o in run["labwareOffsets"]} == {
+        "C1": {"x": 0, "y": 0, "z": 0.5}, "B2": {"x": 0.4, "y": 0.4, "z": 0}}
+    loads = {c["params"]["loadName"]: c["result"]["offsetId"] for c in run["commands"].values() if c["commandType"] == "loadLabware"}
+    assert loads["nest_12_reservoir_15ml"] is not None and loads["nest_96_wellplate_2ml_deep"] is None
+    assert hub.describe_device("ot")["driver"]["labware_offsets"] == {"C1": {"x": 0, "y": 0, "z": 0.5}, "B2": {"x": 0.4, "y": 0.4, "z": 0}}
+
+    # Moved by hand to C2: the default offset applies there, and the engine picks it up on the move.
+    assert (await job(hub, "ot", "move_labware", {"from_slot": "C1", "to_slot": "C2", "use_gripper": False}))["status"] == "succeeded"
+    move = next(c for c in reversed(run["commands"].values()) if c["commandType"] == "moveLabware")
+    assert move["result"]["offsetId"] == run["labwareOffsets"][-1]["id"]
+    assert hub.describe_device("ot")["driver"]["labware_offsets"] == {"C2": {"x": 0, "y": 0, "z": 0.3}, "B2": {"x": 0.4, "y": 0.4, "z": 0}}
+    await hub.stop()
+
+
+async def test_older_robot_software_without_new_versions_or_stored_offsets():
+    robot = flex_robot()
+    robot.stored_offsets = None  # no GET /labwareOffsets before robot software 8.4
+    robot.max_versions = {"nest_96_wellplate_2ml_deep": 1}
+    hub = await start(robot, robot_type="flex")
+    assert (await job(hub, "ot", "move_to", {"pipette": "right", "slot": "D1", "well": "A1"}))["status"] == "succeeded"
+    assert [p["version"] for p in sent(robot, "loadLabware") if p["loadName"] == "nest_96_wellplate_2ml_deep"] == [5, 1]
+    assert robot.runs[robot.current]["labwareOffsets"] == []
+    await hub.stop()
+
+
+async def test_stored_offsets_can_be_turned_off():
+    robot = flex_robot()
+    robot.stored_offsets = [stored("opentrons/nest_96_wellplate_2ml_deep/5", (0, 2, 0))]
+    hub = await start(robot, robot_type="flex", use_stored_offsets=False)
+    assert (await job(hub, "ot", "move_to", {"pipette": "right", "slot": "D1", "well": "A1"}))["status"] == "succeeded"
+    assert robot.runs[robot.current]["labwareOffsets"] == []
+    await hub.stop()
+
+
 # -- custom labware, modules, recovery ---------------------------------------------------------------
 
 def test_definition_catalog_and_uploads(tmp_path: Path):

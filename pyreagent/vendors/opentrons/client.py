@@ -6,12 +6,15 @@ Endpoints used (robot-server, API version header ``Opentrons-Version: *``):
     GET   /instruments                  attached pipettes: mount, instrumentName, data.channels/min_volume/max_volume
     GET   /modules                      attached modules: moduleType, moduleModel, serialNumber, live data
     GET   /deck_configuration           Flex fixtures (trash bins, staging areas, module cutouts)
+    GET   /labwareOffsets               Labware Position Check offsets stored on the robot
+    POST  /runs/{id}/labware_offsets    apply an offset to labware loaded later in the run
     POST  /runs/{id}/labware_definitions  custom labware for this run
     POST  /runs                         create an empty run (409 RunAlreadyActive if another run is current)
     POST  /runs/{id}/commands           enqueue a command; intent "setup" executes immediately on an idle run
           ?waitUntilComplete=true&timeout=<ms>
     GET   /runs/{id}/commands/{cmdId}   poll a command that outlived the wait timeout
     POST  /runs/{id}/actions            {"actionType": "stop"}
+    GET   /runs/{id}                    run status: wait for "stopped" before releasing
     PATCH /runs/{id}                    {"current": false} releases the robot
 """
 
@@ -25,6 +28,7 @@ import httpx
 from ...core.errors import CommunicationError, HardwareError, NeedsAttention, PyreagentError
 
 DEFAULT_PORT = 31950
+RUN_ENDED = frozenset({"stopped", "failed", "succeeded"})
 
 
 def _http_error(response: httpx.Response) -> PyreagentError:
@@ -124,6 +128,19 @@ class OpentronsClient:
     async def deck_configuration(self) -> list[dict[str, Any]]:
         return (await self._request("GET", "/deck_configuration"))["data"]["cutoutFixtures"]
 
+    async def stored_labware_offsets(self) -> list[dict[str, Any]]:
+        """Labware Position Check offsets saved on the robot (software 8.4+); empty on older software."""
+        try:
+            return (await self._request("GET", "/labwareOffsets"))["data"]
+        except PyreagentError as exc:
+            if exc.details.get("http_status") == 404:
+                return []
+            raise
+
+    async def add_labware_offset(self, run_id: str, offset: Mapping[str, Any]) -> None:
+        """Apply an offset to labware loaded later in this run with the same definition and location."""
+        await self._request("POST", f"/runs/{run_id}/labware_offsets", json={"data": dict(offset)})
+
     async def create_run(self) -> str:
         return (await self._request("POST", "/runs", json={"data": {}}))["data"]["id"]
 
@@ -136,6 +153,16 @@ class OpentronsClient:
 
     async def release_run(self, run_id: str) -> None:
         await self._request("PATCH", f"/runs/{run_id}", json={"data": {"current": False}})
+
+    async def wait_for_run_end(self, run_id: str, *, timeout_s: float = 30.0) -> str:
+        """Wait until a stop has taken effect; the robot refuses to release a run while it is ``stop-requested``."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while (status := (await self._request("GET", f"/runs/{run_id}"))["data"]["status"]) not in RUN_ENDED:
+            if loop.time() > deadline:
+                raise TimeoutError(f"run {run_id} still {status} after {timeout_s:g}s")
+            await asyncio.sleep(self.poll_interval_s)
+        return status
 
     async def run_command(self, run_id: str, command_type: str, params: Mapping[str, Any], *, timeout_s: float) -> dict[str, Any]:
         """Execute one setup command and return its ``result``; raise a structured error if it fails."""

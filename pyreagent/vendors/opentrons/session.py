@@ -100,6 +100,7 @@ class OpentronsSession:
         self.modules: dict[str, ModuleSlot] = {}
         self.auto = host == "auto" and transport is None
         self.robot_name: str | None = None
+        self._stored_offsets: list[dict[str, Any]] | None = None
         self._lock = asyncio.Lock()
 
     # -- lifecycle ------------------------------------------------------------------------------
@@ -139,6 +140,7 @@ class OpentronsSession:
             if self.robot == "flex":
                 self.deck_configuration = await self.client.deck_configuration()
             self.run_id = await self.client.create_run()
+            self._stored_offsets = None  # re-read per run: someone may have run Labware Position Check meanwhile
         except BaseException:
             await self.client.close()
             raise
@@ -149,11 +151,15 @@ class OpentronsSession:
         run_id, self.run_id = self.run_id, None
         if run_id is None:
             return
-        for release in (self.client.stop_run, self.client.release_run):
-            try:
-                await release(run_id)
-            except Exception as exc:  # already stopped, or the robot went away: nothing left to release
-                log.debug("releasing run %s: %s", run_id, exc)
+        try:
+            await self.client.stop_run(run_id)
+        except Exception as exc:  # already stopped, or the robot went away
+            log.debug("stopping run %s: %s", run_id, exc)
+        try:
+            await self.client.wait_for_run_end(run_id)
+            await self.client.release_run(run_id)
+        except Exception as exc:  # the robot stays busy for the Opentrons App until the run is released
+            log.warning("could not release run %s on %s: %s", run_id, self.client.base_url, exc)
 
     async def stop(self) -> None:
         """Halt the robot: stops the run for every device on it."""
@@ -226,6 +232,28 @@ class OpentronsSession:
         result = await self.command("loadModule", {"model": registration.model, "location": {"slotName": slot}})
         registration.module_id, registration.generation = result["moduleId"], self.generation
         return registration.module_id
+
+    async def stored_offset(self, definition_uri: str, slot: str) -> dict[str, float] | None:
+        """The robot's stored Labware Position Check offset for this labware in ``slot``, if any.
+
+        Like the Opentrons App: an offset saved for this exact deck slot wins over the
+        labware's default (``anyLocation``) offset; the most recent of each kind counts.
+        On a module only the default offset applies.
+        """
+        if self._stored_offsets is None:
+            self._stored_offsets = await self.client.stored_labware_offsets()
+        on_deck = [{"kind": "onAddressableArea", "addressableAreaName": slot}] if self.module_covering(slot) is None else None
+        exact, default = [], []
+        for offset in self._stored_offsets:
+            if offset.get("definitionUri") != definition_uri:
+                continue
+            sequence = offset.get("locationSequence")
+            if sequence == "anyLocation":
+                default.append(offset)
+            elif on_deck is not None and [{k: c.get(k) for k in ("kind", "addressableAreaName")} for c in sequence or []] == on_deck:
+                exact.append(offset)
+        best = max(exact or default, key=lambda o: o.get("createdAt", ""), default=None)
+        return dict(best["vector"]) if best else None
 
     async def labware_location(self, slot: str) -> dict[str, Any]:
         """``loadLabware``/``moveLabware`` location for ``slot``: on the module there, or on the deck."""

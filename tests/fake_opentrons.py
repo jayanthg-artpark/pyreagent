@@ -74,6 +74,9 @@ def temperature_module(serial: str = "TDV2-0001") -> dict[str, Any]:
             "data": {"status": "idle", "currentTemperature": 23.0, "targetTemperature": None}}
 
 
+STOPPED = ("stop-requested", "stopped")
+
+
 def _error(status: int, kind: str, detail: str) -> httpx.Response:
     return httpx.Response(status, json={"errors": [{"id": kind, "title": kind, "detail": detail}]})
 
@@ -91,6 +94,10 @@ class FakeOpentronsRobot:
             {"cutoutId": f"cutout{r}{c}", "cutoutFixtureId": {1: "singleLeftSlot", 2: "singleCenterSlot", 3: "singleRightSlot"}[c],
              "opentronsModuleSerialNumber": None} for r in "ABCD" for c in (1, 2, 3) if (r, c) != ("A", 3)
         ] + [{"cutoutId": "cutoutA3", "cutoutFixtureId": "trashBinAdapter", "opentronsModuleSerialNumber": None}]
+        self.stored_offsets: list[dict[str, Any]] | None = []
+        """GET /labwareOffsets; None = older software without the endpoint (404)."""
+        self.max_versions: dict[str, int] = {}
+        """Load name -> newest definition version this robot has (default: any)."""
         self.lights = False
         self.liquid_heights: dict[str, float | None] = {}
         """Well name -> liquid height above the bottom reported by tryLiquidProbe (default 5.0; None = no liquid)."""
@@ -108,6 +115,7 @@ class FakeOpentronsRobot:
     def _reset_engine(self) -> None:
         self.pipettes: dict[str, dict[str, Any]] = {}
         self.labware: dict[str, str] = {}  # labwareId -> slot or "offDeck"
+        self.labware_uris: dict[str, str] = {}  # labwareId -> definitionUri
         self.loaded_modules: dict[str, dict[str, Any]] = {}  # moduleId -> attached module
         self.slots: dict[str, str] = {}  # slot -> labwareId
 
@@ -134,19 +142,29 @@ class FakeOpentronsRobot:
             if self.model != "OT-3 Standard":
                 return _error(404, "NotFound", "deck configuration is Flex-only")
             return httpx.Response(200, json={"data": {"cutoutFixtures": self.deck_fixtures, "lastModifiedAt": None}})
+        if (method, parts) == ("GET", ["labwareOffsets"]):
+            if self.stored_offsets is None:
+                return _error(404, "NotFound", "Not Found")
+            return httpx.Response(200, json={"data": self.stored_offsets, "meta": {"cursor": 0, "totalLength": len(self.stored_offsets)}})
         if (method, parts) == ("GET", ["instruments"]):
             return httpx.Response(200, json={"data": self.instruments, "meta": {"cursor": 0, "totalLength": len(self.instruments)}})
         if (method, parts) == ("POST", ["runs"]):
             if self.current is not None:
                 return _error(409, "RunAlreadyActive", f"run {self.current} is currently active")
             run_id = f"run-{next(self._ids)}"
-            self.runs[run_id] = {"id": run_id, "status": "idle", "current": True, "commands": {}}
+            self.runs[run_id] = {"id": run_id, "status": "idle", "current": True, "commands": {}, "labwareOffsets": []}
             self.current = run_id
             self._reset_engine()
             return httpx.Response(201, json={"data": {k: v for k, v in self.runs[run_id].items() if k != "commands"}})
         if len(parts) >= 2 and parts[0] == "runs" and parts[1] in self.runs:
             run = self.runs[parts[1]]
+            if method == "GET" and len(parts) == 2:
+                if run["status"] == "stop-requested":  # like the robot: the stop finishes shortly after it's requested
+                    run["status"] = "stopped"
+                return httpx.Response(200, json={"data": {k: v for k, v in run.items() if k != "commands"}})
             if method == "PATCH" and len(parts) == 2:
+                if run["status"] == "stop-requested":
+                    return _error(409, "RunNotIdle", "Run is currently active. Allow the run to finish or stop it first.")
                 if body["data"].get("current") is False:
                     run["current"] = False
                     if self.current == run["id"]:
@@ -154,8 +172,15 @@ class FakeOpentronsRobot:
                 return httpx.Response(200, json={"data": {"id": run["id"], "current": run["current"]}})
             if method == "POST" and parts[2:] == ["actions"]:
                 if body["data"]["actionType"] == "stop":
-                    run["status"] = "stopped"
+                    if run["status"] in STOPPED:
+                        return _error(409, "RunStopped", f"Run {run['id']} is already stopped")
+                    run["status"] = "stop-requested"
                 return httpx.Response(201, json={"data": {"id": f"action-{next(self._ids)}", **body["data"]}})
+            if method == "POST" and parts[2:] == ["labware_offsets"]:
+                offset = {"id": f"offset-{next(self._ids)}", **body["data"]}
+                assert set(offset["location"]) <= {"slotName", "moduleModel"} and set(offset["vector"]) == {"x", "y", "z"}
+                run["labwareOffsets"].append(offset)
+                return httpx.Response(201, json={"data": offset})
             if method == "POST" and parts[2:] == ["labware_definitions"]:
                 definition = body["data"]
                 self.definitions.append(definition)
@@ -172,7 +197,7 @@ class FakeOpentronsRobot:
         return _error(404, "NotFound", f"{method} {request.url.path}")
 
     async def _create_command(self, run: dict[str, Any], data: dict[str, Any], query: httpx.QueryParams) -> httpx.Response:
-        if run["status"] == "stopped" or not run["current"]:
+        if run["status"] in STOPPED or not run["current"]:
             return _error(409, "RunStopped", f"Run {run['id']} is not the current run")
         assert query.get("waitUntilComplete") == "true" and int(query["timeout"]) > 0
         self.sent.append({**data, "_run": run["id"]})
@@ -192,11 +217,18 @@ class FakeOpentronsRobot:
         run["commands"][command["id"]] = command
         return httpx.Response(201, json={"data": {k: v for k, v in command.items() if k != "_final"}})
 
+    @staticmethod
+    def _offset_id(run: dict[str, Any], uri: str, slot: str, module_model: str | None = None) -> str | None:
+        """Like the engine: the most recent run offset for this definition and location applies."""
+        matches = [o["id"] for o in run["labwareOffsets"] if o["definitionUri"] == uri
+                   and o["location"] == {"slotName": slot, **({"moduleModel": module_model} if module_model else {})}]
+        return matches[-1] if matches else None
+
     def _execute(self, run: dict[str, Any], command_type: str, p: dict[str, Any]) -> dict[str, Any]:
         def fail(kind: str, detail: str) -> dict[str, Any]:
             return {"status": "failed", "error": {"id": "err", "errorType": kind, "errorCode": "4000", "detail": detail}}
 
-        if run["status"] == "stopped":
+        if run["status"] in STOPPED:
             return fail("RunStoppedError", "The run was stopped.")
         if command_type in MOTION and not self.homed:
             return fail("MustHomeError", "Machine is not homed yet.")
@@ -220,7 +252,7 @@ class FakeOpentronsRobot:
             if slot in self.slots:
                 return fail("LocationIsOccupiedError", f"slot {slot} is occupied")
             module_id = f"module-{p['model']}-{slot}"
-            self.loaded_modules[module_id], self.slots[slot] = module, module_id
+            self.loaded_modules[module_id], self.slots[slot] = {**module, "slot": slot}, module_id  # shares the live "data"
             return {"status": "succeeded", "result": {"moduleId": module_id, "model": p["model"], "serialNumber": module["serialNumber"]}}
         if command_type.startswith(("thermocycler/", "temperatureModule/")):
             module = self.loaded_modules.get(p["moduleId"])
@@ -244,21 +276,27 @@ class FakeOpentronsRobot:
                 data["currentTemperature"] = (last["steps"][-1] if "steps" in last else last)["celsius"]
             return {"status": "succeeded", "result": {}}
         if command_type == "loadLabware":
+            if p["version"] > self.max_versions.get(p["loadName"], p["version"]):
+                return fail("LabwareDefinitionDoesNotExistError", f"Unable to find a labware definition for {p['loadName']} v{p['version']}")
             location = p["location"]
+            uri = f"{p['namespace']}/{p['loadName']}/{p['version']}"
             if "moduleId" in location:
-                if location["moduleId"] not in self.loaded_modules:
+                module = self.loaded_modules.get(location["moduleId"])
+                if module is None:
                     return fail("ModuleNotLoadedError", location["moduleId"])
                 labware_id = f"labware-{next(self._ids)}"
-                self.labware[labware_id] = location["moduleId"]
-                return {"status": "succeeded", "result": {"labwareId": labware_id, "definition": {}}}
+                self.labware[labware_id], self.labware_uris[labware_id] = location["moduleId"], uri
+                offset_id = self._offset_id(run, uri, module["slot"], module["moduleModel"])
+                return {"status": "succeeded", "result": {"labwareId": labware_id, "definition": {}, "offsetId": offset_id}}
             slot = location.get("slotName") or location["addressableAreaName"]
             if slot in self.slots:
                 return fail("LocationIsOccupiedError", f"slot {slot} is occupied")
             labware_id = f"labware-{next(self._ids)}"
-            self.labware[labware_id], self.slots[slot] = slot, labware_id
+            self.labware[labware_id], self.slots[slot], self.labware_uris[labware_id] = slot, labware_id, uri
             definition = {"parameters": {"loadName": p["loadName"], "isTiprack": "tiprack" in p["loadName"]},
                           "wells": {w: {"depth": WELL_DEPTH} for w in ALL_WELLS}}
-            return {"status": "succeeded", "result": {"labwareId": labware_id, "definition": definition}}
+            return {"status": "succeeded", "result": {"labwareId": labware_id, "definition": definition,
+                                                      "offsetId": self._offset_id(run, uri, slot)}}
         if command_type == "setRailLights":
             self.lights = p["on"]
             return {"status": "succeeded", "result": {}}
@@ -280,7 +318,7 @@ class FakeOpentronsRobot:
                     return fail("LocationIsOccupiedError", f"{new} is occupied")
                 self.slots[new] = p["labwareId"]
             self.labware[p["labwareId"]] = new
-            return {"status": "succeeded", "result": {}}
+            return {"status": "succeeded", "result": {"offsetId": self._offset_id(run, self.labware_uris[p["labwareId"]], new)}}
         pipette = self.pipettes.get(p["pipetteId"])
         if pipette is None:
             return fail("PipetteNotLoadedError", p["pipetteId"])

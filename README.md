@@ -273,10 +273,13 @@ driver_options = { host = "192.168.1.50", robot = "ot2" }
 | Temperature Module | ✅ | ✅ | its own device |
 | Same modules directly over USB, no robot | ✅ | ✅ | `driver = "opentrons.usb:..."` with `port = "COM7"`; GEN2 plate lift |
 | Custom labware (Labware Creator JSON) | ✅ | ✅ | `labware_definitions = ["path.json"]` |
+| Labware Position Check offsets saved on the robot | ✅ ² | ✅ ² | applied as each labware is loaded or moved; `use_stored_offsets = false` to skip |
 | Find robots on the network | ✅ | ✅ | `pyreagent discover`, or `host = "auto"` (`pip install 'pyreagent[opentrons]'`) |
 | Deck lights | ✅ | ✅ | `set_lights` |
 
 ¹ Needs robot software 8.0 or newer. With older software the driver reports no `nozzle_layouts` feature.
+² Needs robot software 8.4 or newer. Run Labware Position Check from the Opentrons App or touchscreen; the driver
+uses the offset saved for that labware in that slot, else the labware's default offset, as the App does.
 
 - **What happens on connect.** The pipettes and every module on one robot are separate pyreagent devices that
   share a single run on the robot (`vendors/opentrons/session.py`). The run is created when the first device
@@ -288,13 +291,19 @@ driver_options = { host = "192.168.1.50", robot = "ot2" }
 - **Stopping.** `stop` halts the whole robot. Devices that were moving go to `error`. The next `reset` starts a
   fresh run, and every device on the robot reloads into it automatically.
 - **Labware names.** Declare labware by its Opentrons load name. The 36 most common Opentrons labware are in
-  the catalog (`GET /labware`). You can map your own ids with `load_names`.
-- **Not supported yet:** Labware Position Check offsets, Heater-Shaker, Magnetic Module/Block, the Flex
+  the catalog (`GET /labware`). You can map your own ids with `load_names`. Each loads in the definition version
+  the Opentrons Protocol API uses by default (stored offsets are per version), or version 1 on robot software
+  that doesn't have it yet.
+- **Not supported yet:** running Labware Position Check itself, Heater-Shaker, Magnetic Module/Block, the Flex
   Absorbance Plate Reader, and running protocol files. Reach limits are left to the robot, which rejects
   positions it can't reach.
 
-None of the Opentrons drivers has been run on physical hardware yet. They're built from Opentrons' own source
-and tested against fakes of the robot-server and the module firmware.
+The liquid handler driver has been run on a Flex (software 10.1.0; P1000 single and P50 8-channel): connect,
+lights, home, tip pickup and drop with tip-sensor checks, moving to a well, stored labware offsets, and releasing
+the run on disconnect.
+Liquid handling, the OT-2 and the module drivers have not been run on physical hardware yet. They're built from
+Opentrons' own source and tested against fakes of the robot-server and the module firmware. A Flex config for
+hardware tests is in [`examples/flex.toml`](examples/flex.toml).
 
 ## Registry and discovery
 
@@ -358,6 +367,6 @@ Then register the type in `devices/DEVICE_TYPES`.
 | `*/simulated` (all 9 types) | ✅ complete |
 | `balance/mettler_toledo` (MT-SICS level 0/1: `@ I2 S SI T Z`) | 🧪 written from the MT-SICS reference and tested against a protocol fake. **Not yet run on a real balance.** |
 | `pump/new_era` (NE-1000 basic RS-232 mode) | 🧪 written from the NE-1000 manual and tested against a protocol fake. **Not yet run on a real pump.** |
-| `liquid_handler/opentrons` (OT-2 and Flex, HTTP API) | 🧪 built from Opentrons' robot-server and protocol-engine source. Tested against a fake robot-server, and every command type is validated against the official schema. **Not yet run on a physical robot.** |
+| `liquid_handler/opentrons` (OT-2 and Flex, HTTP API) | 🧪 built from Opentrons' robot-server and protocol-engine source. Tested against a fake robot-server, and every command type is validated against the official schema. **Flex: connect, home, tips and moves run on hardware; aspirate/dispense not yet. OT-2 not yet run.** |
 | `thermocycler/opentrons` (robot and USB, GEN1/GEN2) | 🧪 built from Opentrons' module commands and firmware driver, and tested against fakes. **Not yet run on a physical module.** |
 | `temperature_controller/opentrons` (robot and USB) | 🧪 as above. **Not yet run on a physical module.** |
