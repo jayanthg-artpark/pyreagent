@@ -28,6 +28,9 @@ class PipetteInfo(BaseModel):
     min_volume_ul: float = Field(gt=0)
     max_volume_ul: float = Field(gt=0)
     default_flow_rate_ul_s: float | None = Field(default=None, gt=0)
+    independent_channels: bool = Field(
+        default=False, description="Each channel moves in Z on its own (Hamilton, Tecan), so unused channels never touch tips."
+    )
     tip_volumes_ul: list[float] | None = Field(
         default=None, description="Tip sizes this pipette accepts. Default: any tip at least max_volume_ul."
     )

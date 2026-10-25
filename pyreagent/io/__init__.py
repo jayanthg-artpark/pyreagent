@@ -4,6 +4,7 @@ from .http import HttpBridge
 from .mock import MockTransport
 from .serial import SerialTransport
 from .tcp import TcpTransport
+from .usb import MockUsbTransport, UsbBulkTransport
 from .transport import Transport
 
 
@@ -22,4 +23,5 @@ def line_transport(
     raise ValueError("driver needs a serial port (port=...) or a network address (host=..., tcp_port=...)")
 
 
-__all__ = ["HttpBridge", "MockTransport", "SerialTransport", "TcpTransport", "Transport", "line_transport"]
+__all__ = ["HttpBridge", "MockTransport", "MockUsbTransport", "SerialTransport", "TcpTransport", "Transport", "UsbBulkTransport",
+           "line_transport"]

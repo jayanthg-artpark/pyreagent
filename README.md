@@ -9,6 +9,8 @@
   <img alt="Schemas: Pydantic v2" src="https://img.shields.io/badge/schemas-Pydantic%20v2-E92063?logo=pydantic&logoColor=white">
   <img alt="Device types: 9" src="https://img.shields.io/badge/device%20types-9-2DD4BF">
   <img alt="Opentrons: OT-2 and Flex" src="https://img.shields.io/badge/Opentrons-OT--2%20%7C%20Flex-006CFA">
+  <img alt="Hamilton: STAR and STARlet" src="https://img.shields.io/badge/Hamilton-STAR%20%7C%20STARlet-0A5BA8">
+  <img alt="Tecan: Freedom EVO" src="https://img.shields.io/badge/Tecan-Freedom%20EVO-E3051B">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-F59E0B">
 </p>
 
@@ -18,6 +20,7 @@
   <a href="#devices"><b>Devices</b></a> ·
   <a href="#agent-safety"><b>Agent safety</b></a> ·
   <a href="#opentrons-ot-2-and-flex"><b>Opentrons</b></a> ·
+  <a href="#hamilton-star-and-tecan-freedom-evo"><b>Hamilton &amp; Tecan</b></a> ·
   <a href="#adding-a-driver"><b>Adding a driver</b></a>
 </p>
 
@@ -116,7 +119,7 @@ Each device type has its own folder, with one subfolder per brand. Every type al
 | 🔬 **Plate reader** | `read_absorbance` · `open_tray` · `close_tray` · `status` | simulated |
 | 🌡️ **Temperature controller** | `set_temperature` · `wait_for_temperature` · `get_temperature` · `deactivate` | simulated · Opentrons Temperature Module (via robot or USB) |
 | 🔄 **Shaker** | `shake` · `start_shaking` · `stop_shaking` · `status` | simulated |
-| 🤖 **Liquid handler** | `transfer` · `aspirate` · `dispense` · `blow_out` · `touch_tip` · `mix` · `pick_up_tip` (incl. partial tips) · `drop_tip` · `return_tip` · `move_labware` · `probe_liquid_heights` · `load_labware` · `get_deck` · `move_to` · `set_lights` · `home` · `stop` | simulated · Opentrons OT-2 / Flex |
+| 🤖 **Liquid handler** | `transfer` · `aspirate` · `dispense` · `blow_out` · `touch_tip` · `mix` · `pick_up_tip` (incl. partial tips) · `drop_tip` · `return_tip` · `move_labware` · `probe_liquid_heights` · `load_labware` · `get_deck` · `move_to` · `set_lights` · `home` · `stop` | simulated · Opentrons OT-2 / Flex · Hamilton STAR / STARlet · Tecan Freedom EVO |
 | 🧬 **Thermocycler** | `run_profile` · `set_block_temperature` · `open_lid` · `close_lid` · `lift_plate` · `status` · `deactivate` | simulated · Opentrons Thermocycler (via robot or USB) |
 | 📈 **qPCR** | `run_qpcr` (curves + Ct estimate), plus everything a thermocycler does | simulated |
 | 🚿 **Plate washer** | `wash` · `dispense` · `prime` · `status` · `stop` | simulated |
@@ -131,10 +134,12 @@ example `gripper`, `liquid_probe`, `nozzle_layouts`, `ramp_rate`). They're liste
 ```
 pyreagent/
   core/            Device, Backend, @capability, DeviceHub, jobs, audit, errors
-  io/              SerialTransport, TcpTransport, HttpBridge, MockTransport
+  io/              SerialTransport, TcpTransport, HttpBridge, UsbBulkTransport, mock transports
   vendors/
     opentrons/     shared by every Opentrons driver: HTTP client, shared run (session),
                    pipette flow-rate tables, Flex deck configuration, labware JSON, mDNS discovery
+    hamilton/      STAR firmware text protocol, deck (tracks, carriers, CO-RE tip racks), water liquid classes
+    tecan/         EVO firmware protocol, worktable (rails, carriers, Tecan labware), water liquid classes
   devices/
     balance/       balance.py · backend.py · models.py
       simulated/
@@ -150,6 +155,9 @@ pyreagent/
     liquid_handler/          liquid_handler.py · deck.py (deck / tip / volume bookkeeping) · nozzles.py (partial tips)
       simulated/             records every motion: a dry-run trace of an agent's plan
       opentrons/             OT-2 and Flex over the robot's HTTP API
+      hamilton/              STAR / STARlet firmware over USB: channels, CO-RE 96 head, iSWAP
+      tecan/                 Freedom EVO firmware over USB: LiHa, RoMa
+                             (positions.py: well coordinates for these coordinate-driven robots)
     thermocycler/            PCR programs: stages x cycles x steps, heated lid
       simulated/
       opentrons/             Thermocycler Module: robot.py (through the robot) · usb.py (direct, GEN1/GEN2)
@@ -164,7 +172,8 @@ pyreagent/
   configs/         simulated_lab.toml (used by `pyreagent demo`)
 scripts/gen_opentrons_labware.py   regenerates the Opentrons labware catalog
 examples/bench.toml          real-hardware config
-tests/                       protocol-level fakes: MT-SICS balance, NE-1000 pump, Opentrons robot-server and module firmware
+tests/                       protocol-level fakes: MT-SICS balance, NE-1000 pump, Opentrons robot-server and module
+                             firmware, Hamilton STAR and Tecan EVO firmware
 docs/assets/                 banner
 ```
 
@@ -296,6 +305,64 @@ driver_options = { host = "192.168.1.50", robot = "ot2" }
 None of the Opentrons drivers has been run on physical hardware yet. They're built from Opentrons' own source
 and tested against fakes of the robot-server and the module firmware.
 
+## Hamilton STAR and Tecan Freedom EVO
+
+These drivers talk to the instrument firmware directly over USB, so neither Venus nor EVOware is needed. The vendor
+software must not be connected at the same time. We worked out the protocols by studying PyLabRobot's
+reverse-engineered backends, then wrote our own code. The tests check the commands we send against the strings
+PyLabRobot's own tests expect.
+
+```bash
+pip install 'pyreagent[usb]'
+```
+
+On Windows, bind the instrument to the WinUSB or libusbK driver with [Zadig](https://zadig.akeo.ie/). Until you
+switch it back, Venus or EVOware can't use the instrument.
+
+```toml
+[[devices]]
+name = "starlet-1"
+type = "liquid_handler"
+driver = "hamilton"
+[devices.driver_options]
+model = "starlet"                       # or "star"; checked against the instrument on connect
+carriers = { tips = { type = "TIP_CAR_480_A00", track = 1 }, plates = { type = "PLT_CAR_L5AC_A00", track = 9 } }
+[devices.options.deck]                  # slots are "<carrier>.<site>", sites numbered from the front
+"tips.1" = "hamilton_96_tiprack_300ul_filter"
+"plates.1" = { labware = "corning_96_wellplate_360ul_flat", initial_volume_ul = 200 }
+```
+
+The Tecan driver is set up the same way, with `driver = "tecan"`, `model = "evo150"` and carriers on `rail`s.
+
+| Feature | Hamilton STAR / STARlet | Tecan Freedom EVO |
+|---|:-:|:-:|
+| 8 independent channels; single, partial-column and full-column pickups | ✅ | ✅ (LiHa) |
+| Vendor water liquid classes: volume correction, flow rates, air gaps | ✅ per tip size, filter, jet/surface | ✅ DiTi classes |
+| Liquid level detection while aspirating | ✅ `lld = "capacitive"` or `"pressure"` | ✅ always |
+| `probe_liquid_heights` | ✅ capacitive (conductive tips) | |
+| Return tips to the rack, move over a well | ✅ | ✅ |
+| 96 head | ✅ CO-RE 96: whole racks and plates (`pipette = "core96"`) | MCA is only initialised and parked |
+| Plate gripper (`move_labware`) | ✅ iSWAP | ✅ RoMa |
+| Carriers | `TIP_CAR_480_A00`, `PLT_CAR_L5AC_A00`, `PLT_CAR_L5MD_A00` | `MP_3Pos`, `MP_3Pos_PCR`, `DiTi_3Pos`, `DiTi_SBS_3_Pos_MCA96` |
+| Tips | Hamilton CO-RE racks: 10, 50, 300 and 1000 µL, with or without filter | `tecan_diti_*` racks |
+| Plates | any labware with geometry | `tecan_*` labware, or your own with `labware_params` |
+
+- **Start-up.** The STAR reads its configuration on connect: channels, iSWAP, CO-RE 96 head and deck size.
+  If the instrument isn't initialised, or tips are still on the channels, it initialises the channels over the
+  tip waste, which ejects those tips.
+- **Heights on Hamilton plate carriers.** A plate stands on the carrier's pedestal by its well bottoms. For your
+  own labware, set `well_floor_mm` (the material under the wells) in its geometry to get exact heights. Without
+  it, the height pyreagent calculates can be up to that thickness below the real well bottom. The default
+  `bottom_clearance_mm = 1` covers typical plates.
+- **Blow-out.** With `blow_out = true` (the default), the tip takes up blow-out air when it aspirates and blows
+  it out when a dispense empties it. Partial dispenses leave that air in the tip.
+- **Not supported yet:** 4- and 16-channel STARs, autoload, CO-RE grippers, plate lids, Tecan MCA pipetting and
+  4-channel LiHas. `stop` can't abort a firmware command already in flight on either robot. pyreagent
+  stops sending further commands instead.
+
+Neither driver has been run on a physical instrument yet. PyLabRobot marks some EVO constants as unverified:
+the y origins, the µL-to-step factors and the tip z offset. Those are driver options rather than fixed values.
+
 ## Registry and discovery
 
 ```bash
@@ -359,5 +426,7 @@ Then register the type in `devices/DEVICE_TYPES`.
 | `balance/mettler_toledo` (MT-SICS level 0/1: `@ I2 S SI T Z`) | 🧪 written from the MT-SICS reference and tested against a protocol fake. **Not yet run on a real balance.** |
 | `pump/new_era` (NE-1000 basic RS-232 mode) | 🧪 written from the NE-1000 manual and tested against a protocol fake. **Not yet run on a real pump.** |
 | `liquid_handler/opentrons` (OT-2 and Flex, HTTP API) | 🧪 built from Opentrons' robot-server and protocol-engine source. Tested against a fake robot-server, and every command type is validated against the official schema. **Not yet run on a physical robot.** |
+| `liquid_handler/hamilton` (STAR / STARlet, firmware over USB) | 🧪 written from PyLabRobot's reverse-engineered STAR backend. Tested against a fake firmware: tip handling, aspirate, dispense, CO-RE 96 and iSWAP commands match the strings PyLabRobot's tests expect. **Not yet run on a physical STAR.** |
+| `liquid_handler/tecan` (Freedom EVO, firmware over USB) | 🧪 written the same way and tested against a fake firmware with PyLabRobot's expected strings. Constants PyLabRobot marks unverified are driver options. **Not yet run on a physical EVO.** |
 | `thermocycler/opentrons` (robot and USB, GEN1/GEN2) | 🧪 built from Opentrons' module commands and firmware driver, and tested against fakes. **Not yet run on a physical module.** |
 | `temperature_controller/opentrons` (robot and USB) | 🧪 as above. **Not yet run on a physical module.** |

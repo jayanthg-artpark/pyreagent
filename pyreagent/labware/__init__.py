@@ -38,6 +38,35 @@ def parse_well(name: str) -> tuple[int, int]:
     return row - 1, int(match.group(2))
 
 
+class LabwareGeometry(BaseModel):
+    """Physical layout in mm, relative to the labware's front-left-bottom corner: x to the right,
+    y to the back, z up. Row A is at the back. Needed by drivers that move to coordinates
+    (Hamilton, Tecan); drivers that load labware by name (Opentrons) do not use it."""
+
+    size_x_mm: float = Field(gt=0)
+    size_y_mm: float = Field(gt=0)
+    size_z_mm: float = Field(gt=0)
+    a1_x_mm: float = Field(description="Centre of well A1.")
+    a1_y_mm: float = Field(description="Centre of well A1.")
+    pitch_x_mm: float = Field(default=9.0, gt=0, description="Column spacing (A1 to A2).")
+    pitch_y_mm: float = Field(default=9.0, gt=0, description="Row spacing (A1 to B1, toward the front).")
+    well_bottom_z_mm: float = Field(ge=0, description="Height of the well bottom (tip racks: of the tip's top).")
+    well_depth_mm: float = Field(gt=0)
+    well_floor_mm: float = Field(
+        default=0.0, ge=0, description="Material under each well; the plate stands on a pedestal at well_bottom_z_mm minus this."
+    )
+    well_shape: Literal["circular", "rectangular"] = "circular"
+    well_diameter_mm: float | None = Field(default=None, gt=0)
+    well_size_x_mm: float | None = Field(default=None, gt=0)
+    well_size_y_mm: float | None = Field(default=None, gt=0)
+    tip_length_mm: float | None = Field(default=None, gt=0, description="Tip racks: full tip length.")
+    tip_overlap_mm: float | None = Field(default=None, ge=0, description="Tip racks: how far the tip slides onto the nozzle.")
+
+    def well_center(self, row: int, column: int) -> tuple[float, float, float]:
+        """(x, y, z of the well bottom) for 0-based row and column, relative to the labware origin."""
+        return (self.a1_x_mm + column * self.pitch_x_mm, self.a1_y_mm - row * self.pitch_y_mm, self.well_bottom_z_mm)
+
+
 class Labware(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9_.]+$")
     kind: LabwareKind = "plate"
@@ -46,6 +75,7 @@ class Labware(BaseModel):
     columns: int = Field(gt=0, le=96)
     well_volume_ul: float | None = Field(default=None, gt=0, description="Maximum liquid per well, if known.")
     tip_volume_ul: float | None = Field(default=None, gt=0, description="Tip racks only: capacity of each tip.")
+    geometry: LabwareGeometry | None = Field(default=None, description="Physical layout; required by coordinate-driven robots.")
 
     @model_validator(mode="after")
     def _tip_volume_matches_kind(self) -> "Labware":
@@ -56,6 +86,21 @@ class Labware(BaseModel):
     @property
     def well_count(self) -> int:
         return self.rows * self.columns
+
+    def require_geometry(self) -> LabwareGeometry:
+        if self.geometry is None:
+            raise InvalidArgument(
+                f"{self.id} has no physical geometry, which this robot needs to find its wells.",
+                suggested_action="Use labware with geometry from GET /labware (e.g. the Opentrons-derived plates), or add a "
+                "geometry block to its definition.",
+            )
+        return self.geometry
+
+    def well_position(self, well: str) -> tuple[float, float, float]:
+        """(x, y, z of the bottom) of ``well`` relative to the labware origin, in mm."""
+        (well,) = self.check_wells([well])
+        row, column = parse_well(well)
+        return self.require_geometry().well_center(row, column - 1)
 
     def wells(self) -> list[str]:
         """Row-major well names: A1, A2, ... A12, B1, ..."""
@@ -131,4 +176,4 @@ DEFAULT_CATALOG = LabwareCatalog(
     ]
 )
 
-__all__ = ["DEFAULT_CATALOG", "Labware", "LabwareCatalog", "LabwareKind", "parse_well", "row_label"]
+__all__ = ["DEFAULT_CATALOG", "Labware", "LabwareCatalog", "LabwareGeometry", "LabwareKind", "parse_well", "row_label"]

@@ -28,7 +28,37 @@ def labware_fields(definition: dict[str, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {"id": load_name, "kind": kind, "description": definition["metadata"].get("displayName", load_name),
                               "rows": rows, "columns": columns}
     fields["tip_volume_ul" if kind == "tip_rack" else "well_volume_ul"] = float(first["totalLiquidVolume"])
+    fields["geometry"] = geometry_fields(definition)
     return fields
+
+
+_GEOMETRY_KEYS = ("x", "y", "z", "depth")
+
+
+def geometry_fields(definition: dict[str, Any]) -> dict[str, Any] | None:
+    """Physical layout from an Opentrons definition (same origin and axes as pyreagent's); None if it has none."""
+    wells, ordering, dims = definition["wells"], definition["ordering"], definition.get("dimensions")
+    a1 = wells[ordering[0][0]]
+    if not dims or any(k not in a1 for k in _GEOMETRY_KEYS):
+        return None
+    geometry: dict[str, Any] = {
+        "size_x_mm": dims["xDimension"], "size_y_mm": dims["yDimension"], "size_z_mm": dims["zDimension"],
+        "a1_x_mm": a1["x"], "a1_y_mm": a1["y"], "well_bottom_z_mm": a1["z"], "well_depth_mm": a1["depth"],
+        "well_shape": a1.get("shape", "circular"),
+    }
+    if len(ordering) > 1:
+        geometry["pitch_x_mm"] = round(wells[ordering[1][0]]["x"] - a1["x"], 3)
+    if len(ordering[0]) > 1:
+        geometry["pitch_y_mm"] = round(a1["y"] - wells[ordering[0][1]]["y"], 3)
+    if geometry["well_shape"] == "circular":
+        geometry["well_diameter_mm"] = a1["diameter"]
+    else:
+        geometry["well_size_x_mm"], geometry["well_size_y_mm"] = a1["xDimension"], a1["yDimension"]
+    parameters = definition["parameters"]
+    if parameters.get("isTiprack"):
+        geometry["tip_length_mm"] = parameters.get("tipLength")
+        geometry["tip_overlap_mm"] = parameters.get("tipOverlap")
+    return geometry
 
 
 def labware_from_definition(definition: dict[str, Any]) -> Labware:

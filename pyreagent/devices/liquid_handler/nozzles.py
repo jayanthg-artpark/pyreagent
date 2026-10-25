@@ -22,7 +22,6 @@ has already been used, exactly as the robot expects.
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 
 from ...core.errors import InvalidArgument, NotSupported
@@ -127,7 +126,3 @@ def tip_shadow(labware: Labware, well: str, channels: int, layout: NozzleLayout)
     """Rack positions under inactive nozzles at a pickup; they must hold no tips."""
     nmap = nozzle_map(channels, layout)
     return [w for w in _resolve(labware, well, channels, nmap.shadow) if w is not None]
-
-
-def multiplicity(wells: list[str]) -> Counter[str]:
-    return Counter(wells)
