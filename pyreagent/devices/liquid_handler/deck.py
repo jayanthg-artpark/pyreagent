@@ -126,6 +126,8 @@ class DeckModel:
         used = sorted(placed.used_tips.intersection(wells))
         if used:
             return f"tip(s) {', '.join(used)} were already used"
+        if pipette.independent_channels:
+            return None
         blocked = [w for w in tip_shadow(placed.labware, well, pipette.channels, layout) if w not in placed.used_tips]
         if blocked:
             return (f"the unused nozzles would land on tips at {', '.join(blocked[:6])}{'...' if len(blocked) > 6 else ''}; "

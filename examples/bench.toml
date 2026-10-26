@@ -86,3 +86,30 @@ options = { min_c = 4, max_c = 95 }
 # "B1" = "opentrons_flex_96_tiprack_200ul"
 # "C1" = { labware = "nest_12_reservoir_15ml", initial_volume_ul = 12000 }
 # "D1" = { labware = "nest_96_wellplate_2ml_deep", initial_volume_ul = 0 }
+
+# --- Hamilton STARlet over USB (pip install 'pyreagent[usb]'; Windows: WinUSB/libusbK via Zadig) -----
+# Slots are "<carrier>.<site>", sites numbered from the front. Tip racks must be Hamilton CO-RE racks.
+# [[devices]]
+# name = "starlet-1"
+# type = "liquid_handler"
+# driver = "hamilton"                         # pyreagent/devices/liquid_handler/hamilton/
+# [devices.driver_options]
+# model = "starlet"                           # or "star"
+# lld = "off"                                 # "capacitive" / "pressure" to follow the liquid surface
+# carriers = { tips = { type = "TIP_CAR_480_A00", track = 1 }, plates = { type = "PLT_CAR_L5AC_A00", track = 9 } }
+# [devices.options.deck]
+# "tips.1" = "hamilton_96_tiprack_300ul_filter"
+# "tips.2" = "hamilton_96_tiprack_1000ul_filter"
+# "plates.1" = { labware = "corning_96_wellplate_360ul_flat", initial_volume_ul = 200 }
+
+# --- Tecan Freedom EVO over USB ---------------------------------------------------------------
+# [[devices]]
+# name = "evo-1"
+# type = "liquid_handler"
+# driver = "tecan"                            # pyreagent/devices/liquid_handler/tecan/
+# [devices.driver_options]
+# model = "evo150"
+# carriers = { tips = { type = "DiTi_3Pos", rail = 4 }, plates = { type = "MP_3Pos", rail = 16 } }
+# [devices.options.deck]
+# "tips.1" = "tecan_diti_200ul_liha"
+# "plates.1" = { labware = "tecan_microplate_96_well", initial_volume_ul = 200 }
