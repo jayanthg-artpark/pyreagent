@@ -26,7 +26,7 @@ from typing import Any, Mapping
 
 import httpx
 
-from ...core.errors import CommunicationError, HardwareError, NeedsAttention, PyreagentError
+from ...core.errors import CommunicationError, HardwareError, InvalidArgument, NeedsAttention, PyreagentError
 
 DEFAULT_PORT = 31950
 RUN_ENDED = frozenset({"stopped", "failed", "succeeded"})
@@ -63,7 +63,11 @@ SETUP_ERRORS: dict[str, tuple[str, str]] = {
     "HeaterShakerLabwareLatchNotOpenError": ("The heater-shaker latch is closed.", "Open the latch, then retry."),
     "GripperNotAttachedError": ("No gripper is attached.", "Move the labware by hand and record it with use_gripper=false."),
     "ModuleNotAttachedError": ("The module is not attached to the robot.", "Ask a human to check the module's USB and power, then reset."),
+    "CannotPerformModuleAction": ("The module is not in a state that allows this.", "Check the error detail (e.g. close a lid or latch), then retry."),
 }
+# Engine errors for values the module refuses; nothing moved.
+INVALID_ERRORS = frozenset({"InvalidTargetTemperatureError", "InvalidTargetSpeedError", "InvalidWavelengthError",
+                            "EngageHeightOutOfRangeError"})
 
 
 def command_error(command_type: str, error: Mapping[str, Any]) -> PyreagentError:
@@ -72,7 +76,9 @@ def command_error(command_type: str, error: Mapping[str, Any]) -> PyreagentError
     details = {"command": command_type, "error_type": kind, "error_code": error.get("errorCode"), "detail": detail}
     if kind in SETUP_ERRORS:
         message, action = SETUP_ERRORS[kind]
-        return NeedsAttention(message, recoverable=True, suggested_action=action, details=details)
+        return NeedsAttention(f"{message} {detail}".strip(), recoverable=True, suggested_action=action, details=details)
+    if kind in INVALID_ERRORS:
+        return InvalidArgument(f"The robot refused {command_type}: {detail}", details=details)
     return HardwareError(f"Robot failed {command_type}: {kind}: {detail}", details=details)
 
 

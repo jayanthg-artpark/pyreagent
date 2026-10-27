@@ -14,7 +14,7 @@ What it adds on top of plain pipetting, all from Opentrons' own command set:
   on 8-channels, column/row/single on the Flex 96-channel head
 - Flex: tip-presence checks after pickup/drop, liquid-level probing, the gripper
   (``moveLabware usingGripper``), the 50 µL low-volume mode (``configureForVolume``)
-- deck lights, labware on modules and on Flex staging slots, custom labware
+- deck lights, labware on modules (and on Flex Magnetic Blocks) and on Flex staging slots, custom labware
 - Labware Position Check offsets stored on the robot, applied as each labware is loaded
 
 Declare labware by its Opentrons load name (in the pyreagent catalog), map your
@@ -83,6 +83,7 @@ class OpentronsBackend(LiquidHandlerBackend):
         verify_tips: bool = True,
         use_stored_offsets: bool = True,
         home_after_run: bool = True,
+        magnetic_blocks: Sequence[str] = (),
         command_timeout_s: float = 300.0,
         headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -103,12 +104,16 @@ class OpentronsBackend(LiquidHandlerBackend):
             verify_tips: On a Flex, check with the tip sensors that pickups and drops really happened.
             use_stored_offsets: Apply the Labware Position Check offsets saved on the robot (software 8.4+).
             home_after_run: Home the gantry and pipettes when the robot is released (the last device on it disconnects).
+            magnetic_blocks: Flex slots holding a Magnetic Block; labware there is loaded onto the block.
             headers: Extra HTTP headers, e.g. an ``Authorization`` token if the robot requires one.
             transport: Inject an httpx transport (tests use a fake robot).
         """
         self.session = OpentronsSession.get(host=host, robot=robot, port=port, robot_name=robot_name, headers=headers, transport=transport)
         self.session.command_timeout_s = command_timeout_s
         self.session.home_after_run = home_after_run
+        for slot in magnetic_blocks:
+            if slot not in self.session.modules:
+                self.session.register_module("magnetic_block", slot)
         self.robot = robot
         self._trash_option = trash
         self.trash = trash or ROBOTS[robot]["trash"]

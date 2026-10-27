@@ -7,6 +7,7 @@ Brands:
     molecular_devices/   Molecular Devices SpectraMax M5, 384 Plus, Gemini EM (RS-232)
     tecan/               Tecan Infinite 200 PRO, M series (USB bulk)
     byonoy/              Byonoy Absorbance 96 / Luminescence 96 (USB HID)
+    opentrons/           Opentrons Flex Absorbance Plate Reader, through the robot
 """
 
 from .backend import FluorescenceSettings, PlateReaderBackend

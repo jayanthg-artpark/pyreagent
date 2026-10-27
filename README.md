@@ -7,7 +7,7 @@
   <img alt="HTTP API: FastAPI" src="https://img.shields.io/badge/HTTP-FastAPI-009688?logo=fastapi&logoColor=white">
   <img alt="Agents: MCP" src="https://img.shields.io/badge/agents-MCP-7C3AED">
   <img alt="Schemas: Pydantic v2" src="https://img.shields.io/badge/schemas-Pydantic%20v2-E92063?logo=pydantic&logoColor=white">
-  <img alt="Device types: 9" src="https://img.shields.io/badge/device%20types-9-2DD4BF">
+  <img alt="Device types: 10" src="https://img.shields.io/badge/device%20types-10-2DD4BF">
   <img alt="Opentrons: OT-2 and Flex" src="https://img.shields.io/badge/Opentrons-OT--2%20%7C%20Flex-006CFA">
   <img alt="Hamilton: STAR and STARlet" src="https://img.shields.io/badge/Hamilton-STAR%20%7C%20STARlet-0A5BA8">
   <img alt="Tecan: Freedom EVO" src="https://img.shields.io/badge/Tecan-Freedom%20EVO-E3051B">
@@ -116,13 +116,14 @@ Each device type has its own folder, with one subfolder per brand. Every type al
 |---|---|---|
 | ⚖️ **Balance** | `weigh` · `tare` · `zero` | simulated · Mettler Toledo (MT-SICS) |
 | 💧 **Pump** | `dispense` · `withdraw` · `stop` · `status` | simulated · New Era (NE-1000) |
-| 🔬 **Plate reader** | `read_absorbance` · `read_absorbance_spectrum` · `read_fluorescence` · `read_luminescence` · `set_temperature` · `wait_for_temperature` · `shake` · `open_tray` · `close_tray` · `status` (each reader offers what its instrument can do) | simulated · BMG CLARIOstar · BioTek Synergy H1 / HT, Cytation 1/5 · Molecular Devices SpectraMax M5 / 384 Plus / Gemini EM · Tecan Infinite 200 PRO · Byonoy Absorbance 96 / Luminescence 96 |
+| 🔬 **Plate reader** | `read_absorbance` · `read_absorbance_spectrum` · `read_fluorescence` · `read_luminescence` · `set_temperature` · `wait_for_temperature` · `shake` · `open_tray` · `close_tray` · `status` (each reader offers what its instrument can do) | simulated · Opentrons Flex Absorbance Plate Reader (via robot) · BMG CLARIOstar · BioTek Synergy H1 / HT, Cytation 1/5 · Molecular Devices SpectraMax M5 / 384 Plus / Gemini EM · Tecan Infinite 200 PRO · Byonoy Absorbance 96 / Luminescence 96 |
 | 🌡️ **Temperature controller** | `set_temperature` · `wait_for_temperature` · `get_temperature` · `deactivate` | simulated · Opentrons Temperature Module (via robot or USB) |
-| 🔄 **Shaker** | `shake` · `start_shaking` · `stop_shaking` · `status` | simulated |
+| 🔄 **Shaker** | `shake` · `start_shaking` · `stop_shaking` · `status`; heater-shakers also `set_temperature` · `wait_for_temperature` · `deactivate_heater` · `open_latch` · `close_latch` | simulated · Opentrons Heater-Shaker (via robot) |
 | 🤖 **Liquid handler** | `transfer` · `aspirate` · `dispense` · `blow_out` · `touch_tip` · `mix` · `pick_up_tip` (incl. partial tips) · `drop_tip` · `return_tip` · `move_labware` · `probe_liquid_heights` · `load_labware` · `get_deck` · `move_to` · `set_lights` · `home` · `stop` | simulated · Opentrons OT-2 / Flex · Hamilton STAR / STARlet · Tecan Freedom EVO |
 | 🧬 **Thermocycler** | `run_profile` · `set_block_temperature` · `open_lid` · `close_lid` · `lift_plate` · `status` · `deactivate` | simulated · Opentrons Thermocycler (via robot or USB) |
 | 📈 **qPCR** | `run_qpcr` (curves + Ct estimate), plus everything a thermocycler does | simulated |
 | 🚿 **Plate washer** | `wash` · `dispense` · `prime` · `status` · `stop` | simulated |
+| 🧲 **Magnetic separator** | `engage` · `disengage` · `status` | simulated · Opentrons Magnetic Module GEN1/GEN2 (via robot) |
 
 Every device also has `reset`, which clears an error state. Drivers declare optional hardware features (for
 example `gripper`, `liquid_probe`, `nozzle_layouts`, `ramp_rate`). They're listed in each device's `limits` in
@@ -153,11 +154,14 @@ pyreagent/
       biotek/                Synergy H1, Cytation 1/5 (one protocol) and Synergy HT, serial
       molecular_devices/     SpectraMax M5, 384 Plus, Gemini EM, RS-232
       tecan/                 Infinite 200 PRO (M series), USB bulk
+      opentrons/             Flex Absorbance Plate Reader, through the robot
       byonoy/                Absorbance 96 / Luminescence 96, USB HID
     temperature_controller/
       simulated/
       opentrons/             Temperature Module: robot.py (through the robot) · usb.py (direct)
-    shaker/                  simulated/
+    shaker/                  optional heating and labware latch (heater-shakers)
+      simulated/
+      opentrons/             Heater-Shaker Module, through the robot
     liquid_handler/          liquid_handler.py · deck.py (deck / tip / volume bookkeeping) · nozzles.py (partial tips)
       simulated/             records every motion: a dry-run trace of an agent's plan
       opentrons/             OT-2 and Flex over the robot's HTTP API
@@ -171,6 +175,9 @@ pyreagent/
       simulated/
     plate_washer/            wash / dispense / prime, buffer and waste checks
       simulated/
+    magnetic_separator/      engage / disengage magnets under a plate (bead clean-ups)
+      simulated/
+      opentrons/             Magnetic Module GEN1/GEN2, through the OT-2
   labware/         plates, PCR plates, reservoirs, tip racks, tube racks (validate slot/well/plate arguments)
                    opentrons_standard.py: 36 Opentrons labware under their load names (generated)
   server/          create_app() (FastAPI) and build_mcp_server() (MCP)
@@ -272,6 +279,18 @@ name = "ot2-tc"
 type = "thermocycler"
 driver = "opentrons"
 driver_options = { host = "192.168.1.50", robot = "ot2" }
+
+[[devices]]
+name = "flex-hs"
+type = "shaker"
+driver = "opentrons"                      # Heater-Shaker; speed and temperature limits come from the driver
+driver_options = { host = "192.168.1.60", robot = "flex", slot = "D1" }
+
+[[devices]]
+name = "flex-reader"
+type = "plate_reader"
+driver = "opentrons"                      # Absorbance Plate Reader
+driver_options = { host = "192.168.1.60", slot = "C3" }
 ```
 
 | Feature | OT-2 | Flex | How |
@@ -287,6 +306,10 @@ driver_options = { host = "192.168.1.50", robot = "ot2" }
 | Deck configuration: trash bins, staging slots A4–D4, waste chute | | ✅ | read from the robot on connect |
 | Thermocycler Module (GEN1/GEN2) | ✅ | ✅ | its own device; ramp rates; profiles stepped from the host (or `native_profiles = true`) |
 | Temperature Module | ✅ | ✅ | its own device |
+| Heater-Shaker Module | ✅ | ✅ | a `shaker` device with heating (37–95 °C) and the labware latch; 200–3000 rpm |
+| Absorbance Plate Reader | | ✅ | a `plate_reader` device in column 3; 450/562/600/650 nm; the gripper moves its lid (or a human, then `close_tray`) |
+| Magnetic Module GEN1/GEN2 | ✅ | | a `magnetic_separator` device; engage height in mm above the labware base |
+| Magnetic Block | | ✅ | `magnetic_blocks = ["C1"]` on the liquid handler: labware there sits on the block |
 | Same modules directly over USB, no robot | ✅ | ✅ | `driver = "opentrons.usb:..."` with `port = "COM7"`; GEN2 plate lift |
 | Custom labware (Labware Creator JSON) | ✅ | ✅ | `labware_definitions = ["path.json"]` |
 | Labware Position Check offsets saved on the robot | ✅ ² | ✅ ² | applied as each labware is loaded or moved; `use_stored_offsets = false` to skip |
@@ -312,8 +335,9 @@ uses the offset saved for that labware in that slot, else the labware's default 
   the catalog (`GET /labware`). You can map your own ids with `load_names`. Each loads in the definition version
   the Opentrons Protocol API uses by default (stored offsets are per version), or version 1 on robot software
   that doesn't have it yet.
-- **Not supported yet:** running Labware Position Check itself, Heater-Shaker, Magnetic Module/Block, the Flex
-  Absorbance Plate Reader, and running protocol files. Reach limits are left to the robot, which rejects
+- **Not supported yet:** running Labware Position Check itself, adapters (such as the Heater-Shaker's plate
+  adapters, so the pipettes can't yet reach labware on a Heater-Shaker), the Flex Stacker, and running protocol
+  files. Reach limits are left to the robot, which rejects
   positions it can't reach.
 
 The liquid handler driver has been run on a Flex (software 10.1.0; P1000 single and P50 8-channel): connect,
@@ -473,7 +497,7 @@ Then register the type in `devices/DEVICE_TYPES`.
 
 | Driver | Status |
 |---|---|
-| `*/simulated` (all 9 types) | ✅ complete |
+| `*/simulated` (all 10 types) | ✅ complete |
 | `balance/mettler_toledo` (MT-SICS level 0/1: `@ I2 S SI T Z`) | 🧪 written from the MT-SICS reference and tested against a protocol fake. **Not yet run on a real balance.** |
 | `pump/new_era` (NE-1000 basic RS-232 mode) | 🧪 written from the NE-1000 manual and tested against a protocol fake. **Not yet run on a real pump.** |
 | `liquid_handler/opentrons` (OT-2 and Flex, HTTP API) | 🧪 built from Opentrons' robot-server and protocol-engine source. Tested against a fake robot-server, and every command type is validated against the official schema. **Flex: connect, home, tips, moves, single-channel aspirate/dispense and stored labware offsets run on hardware; 8-channel not yet. OT-2 not yet run.** |
@@ -482,3 +506,4 @@ Then register the type in `devices/DEVICE_TYPES`.
 | `plate_reader/bmg_labtech`, `biotek`, `molecular_devices`, `tecan`, `byonoy` | 🧪 written from protocol descriptions of PyLabRobot's drivers and tested against protocol fakes, byte-exact where recorded traffic exists. **Not yet run on a physical reader.** |
 | `thermocycler/opentrons` (robot and USB, GEN1/GEN2) | 🧪 built from Opentrons' module commands and firmware driver, and tested against fakes. **Not yet run on a physical module.** |
 | `temperature_controller/opentrons` (robot and USB) | 🧪 as above. **Not yet run on a physical module.** |
+| `shaker/opentrons`, `plate_reader/opentrons`, `magnetic_separator/opentrons` (Heater-Shaker, Absorbance Plate Reader, Magnetic Module, through the robot) | 🧪 built from Opentrons' module commands; every command is validated against the official schema and tested against a fake robot-server that enforces the engine's rules. **Not yet run on a physical module.** |

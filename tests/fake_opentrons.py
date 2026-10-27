@@ -47,6 +47,18 @@ REQUIRED = {
     "prepareToAspirate": {"pipetteId"},
     "setRailLights": {"on"},
     "dropTip": {"pipetteId", "labwareId", "wellName"},
+    "heaterShaker/setAndWaitForShakeSpeed": {"moduleId", "rpm"},
+    "heaterShaker/deactivateShaker": {"moduleId"},
+    "heaterShaker/setTargetTemperature": {"moduleId", "celsius"},
+    "heaterShaker/deactivateHeater": {"moduleId"},
+    "heaterShaker/openLabwareLatch": {"moduleId"},
+    "heaterShaker/closeLabwareLatch": {"moduleId"},
+    "absorbanceReader/initialize": {"moduleId", "measureMode", "sampleWavelengths"},
+    "absorbanceReader/read": {"moduleId"},
+    "absorbanceReader/openLid": {"moduleId"},
+    "absorbanceReader/closeLid": {"moduleId"},
+    "magneticModule/engage": {"moduleId", "height"},
+    "magneticModule/disengage": {"moduleId"},
 }
 MOTION = {"pickUpTip", "aspirate", "dispense", "moveToAddressableAreaForDropTip", "dropTipInPlace", "blowout", "touchTip",
           "moveToWell", "tryLiquidProbe", "dropTip", "moveLabware"}
@@ -74,6 +86,30 @@ def temperature_module(serial: str = "TDV2-0001") -> dict[str, Any]:
             "data": {"status": "idle", "currentTemperature": 23.0, "targetTemperature": None}}
 
 
+def heater_shaker(serial: str = "HSM-0001") -> dict[str, Any]:
+    return {"id": f"hw-{serial}", "serialNumber": serial, "moduleModel": "heaterShakerModuleV1", "moduleType": "heaterShakerModuleType",
+            "data": {"status": "idle", "labwareLatchStatus": "idle_closed", "speedStatus": "idle", "currentSpeed": 0, "targetSpeed": None,
+                     "temperatureStatus": "idle", "currentTemperature": 23.0, "targetTemperature": None, "errorDetails": None}}
+
+
+def absorbance_reader(serial: str = "ABS-0001", wavelengths: tuple[int, ...] = (450, 562, 600, 650)) -> dict[str, Any]:
+    return {"id": f"hw-{serial}", "serialNumber": serial, "moduleModel": "absorbanceReaderV1", "moduleType": "absorbanceReaderType",
+            "wavelengths": list(wavelengths),  # the fake's own: what the hardware supports
+            "data": {"status": "idle", "lidStatus": "on", "platePresence": "absent", "measureMode": "", "sampleWavelengths": [],
+                     "referenceWavelength": None, "errorDetails": None}}
+
+
+def magnetic_module(serial: str = "MDV2-0001", model: str = "magneticModuleV2") -> dict[str, Any]:
+    return {"id": f"hw-{serial}", "serialNumber": serial, "moduleModel": model, "moduleType": "magneticModuleType",
+            "data": {"status": "disengaged", "engaged": False, "height": 0.0}}
+
+
+def absorbance(well_index: int, wavelength: int) -> float:
+    """The fake reader's OD for a well (row-major index) at a wavelength."""
+    return round(0.05 + well_index * 0.01 + wavelength / 10000, 4)
+
+
+MAGNET_RANGE_MM = {"magneticModuleV1": (-2.5, 20.0), "magneticModuleV2": (-2.5, 22.5)}
 STOPPED = ("stop-requested", "stopped")
 
 
@@ -231,6 +267,61 @@ class FakeOpentronsRobot:
                    and o["location"] == {"slotName": slot, **({"moduleModel": module_model} if module_model else {})}]
         return matches[-1] if matches else None
 
+    def _module_command(self, module: dict[str, Any], action: str, p: dict[str, Any], fail: Any) -> dict[str, Any]:
+        """Heater-shaker, absorbance reader and magnetic module commands, with the engine's rules.
+
+        Run-level state (latch known closed, reader configured) lives on the run's copy of the
+        module, so a new run starts without it, as on the robot.
+        """
+        data, ok = module["data"], {"status": "succeeded", "result": {}}
+        if action == "setAndWaitForShakeSpeed":
+            if not module.get("latched"):
+                return fail("CannotPerformModuleAction", "Heater-Shaker cannot start shaking if the labware latch has not been set to closed.")
+            if not 200 <= p["rpm"] <= 3000:
+                return fail("InvalidTargetSpeedError", f"Cannot set Heater-Shaker to shake at {p['rpm']} rpm.")
+            data.update(currentSpeed=round(p["rpm"]), targetSpeed=round(p["rpm"]), speedStatus="holding at target")
+        elif action == "deactivateShaker":
+            data.update(currentSpeed=0, targetSpeed=None, speedStatus="idle")
+        elif action == "setTargetTemperature":
+            data.update(targetTemperature=p["celsius"], currentTemperature=p["celsius"], temperatureStatus="holding at target")
+        elif action == "deactivateHeater":
+            data.update(targetTemperature=None, temperatureStatus="idle")
+        elif action == "openLabwareLatch":
+            if data["currentSpeed"]:
+                return fail("CannotPerformModuleAction", "Heater-Shaker cannot open its labware latch while it is shaking.")
+            data["labwareLatchStatus"], module["latched"] = "idle_open", False
+        elif action == "closeLabwareLatch":
+            data["labwareLatchStatus"], module["latched"] = "idle_closed", True
+        elif action in ("openLid", "closeLid"):
+            wanted = "off" if action == "openLid" else "on"
+            if data["lidStatus"] != wanted and not any(i["instrumentType"] == "gripper" for i in self.instruments):
+                return fail("GripperNotAttachedError", "the gripper moves the reader lid")
+            data["lidStatus"] = wanted
+        elif action == "initialize":
+            unsupported = set(p["sampleWavelengths"]) - set(module["wavelengths"])
+            if unsupported:
+                return fail("InvalidWavelengthError", f"Unsupported wavelengths: {sorted(unsupported)}")
+            if p["measureMode"] == "multi" and not 1 <= len(p["sampleWavelengths"]) <= 6:
+                return fail("ValueError", "Measure mode multi requires 1-6 sample wavelengths")
+            module["configured"] = list(p["sampleWavelengths"])
+            data.update(measureMode=p["measureMode"], sampleWavelengths=list(p["sampleWavelengths"]))
+        elif action == "read":
+            if not module.get("configured"):
+                return fail("CannotPerformModuleAction", "Cannot read on the Absorbance Reader without initializing it first.")
+            if data["lidStatus"] != "on":
+                return fail("CannotPerformModuleAction", "Absorbance Plate Reader can't read a plate with the lid open.")
+            wells = [f"{r}{c}" for r in "ABCDEFGH" for c in range(1, 13)]
+            return {"status": "succeeded", "result": {"data": {str(nm): {w: absorbance(i, nm) for i, w in enumerate(wells)}
+                                                               for nm in module["configured"]}, "fileIds": []}}
+        elif action == "engage":
+            low, high = MAGNET_RANGE_MM[module["moduleModel"]]
+            if not low <= p["height"] <= high:
+                return fail("EngageHeightOutOfRangeError", f"Invalid engage height for {module['moduleModel']}: {p['height']}")
+            data.update(status="engaged", engaged=True, height=p["height"])
+        elif action == "disengage":
+            data.update(status="disengaged", engaged=False, height=0.0)
+        return ok
+
     def _execute(self, run: dict[str, Any], command_type: str, p: dict[str, Any]) -> dict[str, Any]:
         def fail(kind: str, detail: str) -> dict[str, Any]:
             return {"status": "failed", "error": {"id": "err", "errorType": kind, "errorCode": "4000", "detail": detail}}
@@ -253,6 +344,12 @@ class FakeOpentronsRobot:
             return {"status": "succeeded", "result": {"pipetteId": pipette_id}}
         if command_type == "loadModule":
             slot = p["location"]["slotName"]
+            if p["model"] == "magneticBlockV1":  # passive: never in GET /modules
+                if slot in self.slots:
+                    return fail("LocationIsOccupiedError", f"slot {slot} is occupied")
+                module_id = f"module-magneticBlockV1-{slot}"
+                self.loaded_modules[module_id], self.slots[slot] = {"moduleModel": "magneticBlockV1", "slot": slot, "data": {}}, module_id
+                return {"status": "succeeded", "result": {"moduleId": module_id, "model": p["model"]}}
             module = next((m for m in self.attached_modules if m["moduleModel"] == p["model"]), None)
             if module is None:
                 return fail("ModuleNotAttachedError", f"no {p['model']} attached")
@@ -282,6 +379,11 @@ class FakeOpentronsRobot:
                 last = p["profileElements"][-1]
                 data["currentTemperature"] = (last["steps"][-1] if "steps" in last else last)["celsius"]
             return {"status": "succeeded", "result": {}}
+        if command_type.startswith(("heaterShaker/", "absorbanceReader/", "magneticModule/")):
+            module = self.loaded_modules.get(p["moduleId"])
+            if module is None:
+                return fail("ModuleNotLoadedError", p["moduleId"])
+            return self._module_command(module, command_type.split("/", 1)[1], p, fail)
         if command_type == "loadLabware":
             if p["version"] > self.max_versions.get(p["loadName"], p["version"]):
                 return fail("LabwareDefinitionDoesNotExistError", f"Unable to find a labware definition for {p['loadName']} v{p['version']}")

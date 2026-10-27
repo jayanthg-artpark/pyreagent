@@ -35,8 +35,19 @@ ROBOTS: dict[str, dict[str, Any]] = {
 # Module kind -> robot -> anchor slot -> slots the module covers (labware on it is loaded via the module).
 MODULE_FOOTPRINTS: dict[str, dict[str, dict[str, list[str]]]] = {
     "thermocycler": {"ot2": {"7": ["7", "8", "10", "11"]}, "flex": {"B1": ["A1", "B1"]}},
+    "absorbance_reader": {"flex": {slot: [slot] for slot in ("A3", "B3", "C3", "D3")}},  # lid docks in column 4
 }
-MODULE_TYPES = {"thermocycler": "thermocyclerModuleType", "temperature": "temperatureModuleType"}
+MODULE_TYPES = {
+    "thermocycler": "thermocyclerModuleType",
+    "temperature": "temperatureModuleType",
+    "heater_shaker": "heaterShakerModuleType",
+    "absorbance_reader": "absorbanceReaderType",
+    "magnetic": "magneticModuleType",
+}
+# Modules that only some robots take.
+MODULE_ROBOTS = {"absorbance_reader": {"flex"}, "magnetic_block": {"flex"}, "magnetic": {"ot2"}}
+# Passive modules: no USB connection, so not in GET /modules; loaded into the run by model.
+PASSIVE_MODELS = {"magnetic_block": "magneticBlockV1"}
 
 
 @dataclass
@@ -184,6 +195,8 @@ class OpentronsSession:
 
     def register_module(self, kind: str, slot: str, *, serial: str | None = None) -> ModuleSlot:
         """Declare which module sits in ``slot`` (at device construction; does not touch the robot)."""
+        if self.robot not in MODULE_ROBOTS.get(kind, {self.robot}):
+            raise ValueError(f"a {kind} module does not fit the {self.robot}")
         footprints = MODULE_FOOTPRINTS.get(kind, {}).get(self.robot)
         if footprints is not None and slot not in footprints:
             raise ValueError(f"a {kind} module on {self.robot} must be in slot {', '.join(footprints)}")
@@ -234,9 +247,12 @@ class OpentronsSession:
         registration = self.modules[slot]
         if registration.module_id is not None and registration.generation == self.generation:
             return registration.module_id
-        module = await self._resolve(registration)
-        registration.serial = registration.serial or module.get("serialNumber")
-        registration.model = module["moduleModel"]
+        if registration.kind in PASSIVE_MODELS:
+            registration.model = PASSIVE_MODELS[registration.kind]
+        else:
+            module = await self._resolve(registration)
+            registration.serial = registration.serial or module.get("serialNumber")
+            registration.model = module["moduleModel"]
         result = await self.command("loadModule", {"model": registration.model, "location": {"slotName": slot}})
         registration.module_id, registration.generation = result["moduleId"], self.generation
         return registration.module_id
