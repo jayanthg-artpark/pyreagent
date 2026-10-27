@@ -56,7 +56,7 @@ moves, one command at a time per device, structured errors and an audit log.
 ```bash
 uv sync                    # Python 3.12+
 uv run pyreagent demo      # one simulated device of every type on http://127.0.0.1:8000
-uv run pytest              # 123 tests, no hardware needed
+uv run pytest              # 278 tests, no hardware needed
 ```
 
 Open **<http://127.0.0.1:8000/docs>** for the generated API. To let Claude Code drive the bench over MCP:
@@ -116,7 +116,7 @@ Each device type has its own folder, with one subfolder per brand. Every type al
 |---|---|---|
 | ⚖️ **Balance** | `weigh` · `tare` · `zero` | simulated · Mettler Toledo (MT-SICS) |
 | 💧 **Pump** | `dispense` · `withdraw` · `stop` · `status` | simulated · New Era (NE-1000) |
-| 🔬 **Plate reader** | `read_absorbance` · `open_tray` · `close_tray` · `status` | simulated |
+| 🔬 **Plate reader** | `read_absorbance` · `read_absorbance_spectrum` · `read_fluorescence` · `read_luminescence` · `set_temperature` · `wait_for_temperature` · `shake` · `open_tray` · `close_tray` · `status` (each reader offers what its instrument can do) | simulated · BMG CLARIOstar · BioTek Synergy H1 / HT, Cytation 1/5 · Molecular Devices SpectraMax M5 / 384 Plus / Gemini EM · Tecan Infinite 200 PRO · Byonoy Absorbance 96 / Luminescence 96 |
 | 🌡️ **Temperature controller** | `set_temperature` · `wait_for_temperature` · `get_temperature` · `deactivate` | simulated · Opentrons Temperature Module (via robot or USB) |
 | 🔄 **Shaker** | `shake` · `start_shaking` · `stop_shaking` · `status` | simulated |
 | 🤖 **Liquid handler** | `transfer` · `aspirate` · `dispense` · `blow_out` · `touch_tip` · `mix` · `pick_up_tip` (incl. partial tips) · `drop_tip` · `return_tip` · `move_labware` · `probe_liquid_heights` · `load_labware` · `get_deck` · `move_to` · `set_lights` · `home` · `stop` | simulated · Opentrons OT-2 / Flex · Hamilton STAR / STARlet · Tecan Freedom EVO |
@@ -147,7 +147,13 @@ pyreagent/
     pump/
       simulated/
       new_era/               NE-1000 family syringe pumps, RS-232
-    plate_reader/            simulated/
+    plate_reader/            plate_reader.py · models.py (ReaderSpec: what an instrument can do)
+      simulated/             multimode, or any narrower ReaderSpec
+      bmg_labtech/           CLARIOstar / CLARIOstar Plus, FTDI serial
+      biotek/                Synergy H1, Cytation 1/5 (one protocol) and Synergy HT, serial
+      molecular_devices/     SpectraMax M5, 384 Plus, Gemini EM, RS-232
+      tecan/                 Infinite 200 PRO (M series), USB bulk
+      byonoy/                Absorbance 96 / Luminescence 96, USB HID
     temperature_controller/
       simulated/
       opentrons/             Temperature Module: robot.py (through the robot) · usb.py (direct)
@@ -235,7 +241,8 @@ sequenceDiagram
 | `liquid_handler` | The server tracks the deck: labware per slot, liquid per well, used tips, what each tip holds, and the active nozzle layout. A `transfer` is dry-run against that state. These are refused up front: not enough liquid in a source, a destination that would overflow, too few compatible tips, an empty slot, the wrong labware kind, below-minimum volumes, and positions where the active nozzles don't fit. With partial tips, a pickup is also refused if the unused nozzles would land on tips that are still in the rack. Volumes above the tip size are split into several trips. A `stop` or cancel mid-motion puts the robot in `error` until it's reset. |
 | `thermocycler` / `qpcr` | Every step and the final hold must be within `min_c`..`max_c`. The lid temperature must not exceed `max_lid_c`, and the cycle count must not exceed `max_cycles`. Ramp rates need the `ramp_rate` feature. For qPCR, the plate must match the block format, channels must exist, and at least one step must set `acquire`. Runs refuse to start with the lid open. `deactivate` cancels a running program. |
 | `plate_washer` | The buffer bottle must exist, the plate format must fit the manifold, columns must be in range, and the volume must fit both the well and the dispenser. Before running, it checks for buffer left and room in the waste bottle (`needs_attention` if not). |
-| `pump`, `temperature_controller`, `shaker`, `plate_reader` | Volume, rate, temperature, rpm and wavelength must be within the device's configured limits. The plate must exist and be a plate. Requested wells must exist. |
+| `plate_reader` | Each driver declares its instrument in a `ReaderSpec`; capabilities it lacks are hidden from `GET /devices` and refused. Wavelengths (or the fixed filters), excitation/emission gap, gain, optics, read height, flashes, integration time, set point and shake mode/speed must be within the spec. The plate must be a format the reader takes, with well positions if the reader needs them, and the tray must be closed. |
+| `pump`, `temperature_controller`, `shaker` | Volume, rate, temperature and rpm must be within the device's configured limits. |
 
 qPCR Ct values are a simple baseline/threshold estimate (`devices/qpcr/analysis.py`). Use the vendor's
 software for results you report.
@@ -374,6 +381,39 @@ The Tecan driver is set up the same way, with `driver = "tecan"`, `model = "evo1
 Neither driver has been run on a physical instrument yet. PyLabRobot marks some EVO constants as unverified:
 the y origins, the µL-to-step factors and the tip z offset. Those are driver options rather than fixed values.
 
+## Plate readers
+
+Each driver declares what its instrument can do (`ReaderSpec`): which measurements, wavelength and gain
+ranges, optics, read height, incubation, shaking, tray, plate formats. `GET /devices` lists only the
+capabilities that instrument has, with its ranges in `limits`, and every call is checked against them before
+the reader is touched. Results come back per well: OD, RFU (with the gain used) or RLU.
+
+| Driver | Instruments | Measurements | Connection |
+|---|---|---|---|
+| `bmg_labtech` | CLARIOstar, CLARIOstar Plus | absorbance + spectrum, fluorescence (top/bottom, gain), luminescence, incubation, drawer | FTDI serial, 125000 baud: `port = "COM5"` |
+| `biotek` | Synergy H1, Cytation 1/5; Synergy HT | H1/Cytation: absorbance, fluorescence, luminescence, shaking, incubation (H1). HT: absorbance, incubation | FTDI serial: `port = "COM6"` |
+| `molecular_devices` | SpectraMax M5, 384 Plus, Gemini EM | per model: absorbance + spectrum, fluorescence, luminescence; heating, drawer, shaking | RS-232: `port = "COM4"` |
+| `tecan` | Infinite 200 PRO (M series) | absorbance, fluorescence (top), luminescence, incubation, shaking, carrier | USB bulk (`pip install 'pyreagent[usb]'`; on Windows a WinUSB driver via Zadig) |
+| `byonoy` | Absorbance 96, Luminescence 96 | absorbance at the unit's filters, or luminescence; 96-well only | USB HID (`pip install 'pyreagent[hid]'`) |
+
+```toml
+[[devices]]
+name = "reader-1"
+type = "plate_reader"
+driver = "biotek"
+driver_options = { port = "COM6", model = "synergy_h1" }
+```
+
+- The serial drivers need `pip install 'pyreagent[serial]'`. The CLARIOstar's FTDI chip uses its own product
+  id, so Windows may need FTDI's driver pointed at it before it appears as a COM port.
+- Readers that find wells by position (CLARIOstar, BioTek H1/Cytation, SpectraMax, Infinite) need labware with
+  geometry, such as the Opentrons-derived plates in `GET /labware`.
+- The Absorbance 96 runs the firmware's 660 nm reference read on connect: put the illumination unit on the
+  base first. Its luminescence sibling always measures all 96 wells and keeps the ones asked for.
+- The protocols come from studying PyLabRobot's drivers (MIT): protocol descriptions were written from them,
+  and pyreagent's drivers were written from those descriptions. Values PyLabRobot marks unverified are driver
+  options, and each driver's docstring lists what is assumed. None has run on a physical reader yet.
+
 ## Registry and discovery
 
 ```bash
@@ -439,5 +479,6 @@ Then register the type in `devices/DEVICE_TYPES`.
 | `liquid_handler/opentrons` (OT-2 and Flex, HTTP API) | 🧪 built from Opentrons' robot-server and protocol-engine source. Tested against a fake robot-server, and every command type is validated against the official schema. **Flex: connect, home, tips, moves, single-channel aspirate/dispense and stored labware offsets run on hardware; 8-channel not yet. OT-2 not yet run.** |
 | `liquid_handler/hamilton` (STAR / STARlet, firmware over USB) | 🧪 written from PyLabRobot's reverse-engineered STAR backend. Tested against a fake firmware: tip handling, aspirate, dispense, CO-RE 96 and iSWAP commands match the strings PyLabRobot's tests expect. **Not yet run on a physical STAR.** |
 | `liquid_handler/tecan` (Freedom EVO, firmware over USB) | 🧪 written the same way and tested against a fake firmware with PyLabRobot's expected strings. Constants PyLabRobot marks unverified are driver options. **Not yet run on a physical EVO.** |
+| `plate_reader/bmg_labtech`, `biotek`, `molecular_devices`, `tecan`, `byonoy` | 🧪 written from protocol descriptions of PyLabRobot's drivers and tested against protocol fakes, byte-exact where recorded traffic exists. **Not yet run on a physical reader.** |
 | `thermocycler/opentrons` (robot and USB, GEN1/GEN2) | 🧪 built from Opentrons' module commands and firmware driver, and tested against fakes. **Not yet run on a physical module.** |
 | `temperature_controller/opentrons` (robot and USB) | 🧪 as above. **Not yet run on a physical module.** |

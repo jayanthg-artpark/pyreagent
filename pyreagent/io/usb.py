@@ -23,12 +23,16 @@ class UsbBulkTransport:
         interface: int = 0,
         read_size: int = 64,
         timeout_s: float = 10.0,
+        zero_length_packets: bool = False,
     ) -> None:
+        """``zero_length_packets``: end a write whose length is a multiple of the endpoint's packet
+        size with an empty packet, for firmware that waits for a short packet to end a transfer."""
         self.vendor_id, self.product_id = vendor_id, product_id
         self.serial_number = serial_number
         self.interface = interface
         self.read_size = read_size
         self.timeout_s = timeout_s
+        self.zero_length_packets = zero_length_packets
         self._device: Any = None
         self._out: Any = None
         self._in: Any = None
@@ -71,6 +75,8 @@ class UsbBulkTransport:
         if self._out is None:
             raise ConnectionError("USB device is not open")
         await asyncio.to_thread(self._out.write, data, int(self.timeout_s * 1000))
+        if self.zero_length_packets and data and len(data) % self._out.wMaxPacketSize == 0:
+            await asyncio.to_thread(self._out.write, b"", int(self.timeout_s * 1000))
 
     async def read(self, timeout_s: float | None = None) -> bytes:
         """One bulk read (a USB transfer ends on a short packet). Raises ``TimeoutError`` if nothing arrives."""

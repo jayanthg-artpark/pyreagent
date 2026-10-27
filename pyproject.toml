@@ -13,9 +13,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-serial = ["pyserial>=3.5"]
+serial = ["pyserial>=3.5"]  # balances, pumps, CLARIOstar / BioTek / SpectraMax readers
 opentrons = ["zeroconf>=0.131"]  # finding robots on the network (host = "auto")
-usb = ["pyusb>=1.2"]  # Hamilton STAR / Tecan EVO firmware over USB
+usb = ["pyusb>=1.2"]  # Hamilton STAR / Tecan EVO firmware, Tecan Infinite reader over USB
+hid = ["hidapi>=0.14"]  # Byonoy plate readers (USB HID)
 
 [project.scripts]
 pyreagent = "pyreagent.cli:main"

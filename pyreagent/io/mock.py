@@ -46,6 +46,13 @@ class MockTransport(Transport):
         del self._rx[:end]
         return data
 
+    async def read_exactly(self, size: int, timeout_s: float) -> bytes:
+        if len(self._rx) < size:
+            raise TimeoutError(f"no scripted reply of {size} bytes (pending {bytes(self._rx)!r})")
+        data = bytes(self._rx[:size])
+        del self._rx[:size]
+        return data
+
     async def discard_input(self) -> None:
         self._rx.clear()
 

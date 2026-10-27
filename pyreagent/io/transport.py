@@ -29,6 +29,10 @@ class Transport(abc.ABC):
     async def read_until(self, terminator: bytes, timeout_s: float) -> bytes:
         """Read up to and including ``terminator``. Raise ``TimeoutError`` if it does not arrive."""
 
+    async def read_exactly(self, size: int, timeout_s: float) -> bytes:
+        """Read exactly ``size`` bytes, whatever they contain (binary replies). Raise ``TimeoutError`` if they do not arrive."""
+        raise NotImplementedError(f"{type(self).__name__} cannot read fixed-length replies")
+
     async def discard_input(self) -> None:
         """Drop unread bytes (e.g. a late reply to a command that timed out)."""
 

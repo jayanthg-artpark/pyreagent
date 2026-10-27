@@ -25,6 +25,7 @@ from .errors import (
     DeviceOffline,
     InvalidArgument,
     NotFound,
+    NotSupported,
     PyreagentError,
     translate_exception,
 )
@@ -123,8 +124,19 @@ class Device(Generic[B]):
                 details=self._activity.model_dump(mode="json"),
             )
 
+    def supports(self, capability_name: str) -> bool:
+        """Whether this instrument can do ``capability_name``. Override when some drivers of a type can't.
+
+        Unsupported capabilities are left out of ``describe()``, so finding devices by capability only
+        finds instruments that can do it, and calls to them are refused with ``not_supported``.
+        """
+        return True
+
     def check_arguments(self, spec: CapabilitySpec, validated: BaseModel) -> None:
-        """Instance-level argument checks (``Within`` bounds, then ``validate_arguments``)."""
+        """Instance-level argument checks (support, ``Within`` bounds, then ``validate_arguments``)."""
+        if not self.supports(spec.name):
+            raise NotSupported(f"{self.name} ({self.backend.vendor} {self.backend.model}) cannot {spec.name}.",
+                               details={"capabilities": [n for n in sorted(self.capability_specs()) if self.supports(n)]})
         values = spec.values(validated)
         spec.check_bounds(values, self.limits())
         self.validate_arguments(spec.name, values)
@@ -237,7 +249,7 @@ class Device(Generic[B]):
             "simulated": self.backend.simulated,
             "limits": self.limits(),
             "capabilities": [
-                spec.describe() for _, spec in sorted(self.capability_specs().items())
+                spec.describe() for name, spec in sorted(self.capability_specs().items()) if self.supports(name)
             ],
         }
 
