@@ -11,6 +11,7 @@ Endpoints used (robot-server, API version header ``Opentrons-Version: *``):
     POST  /runs/{id}/commands           enqueue a command; intent "setup" executes immediately on an idle run
           ?waitUntilComplete=true&timeout=<ms>
     GET   /runs/{id}/commands/{cmdId}   poll a command that outlived the wait timeout
+    GET   /runs/{id}                    run status ("stop-requested" until a stop has finished)
     POST  /runs/{id}/actions            {"actionType": "stop"}
     PATCH /runs/{id}                    {"current": false} releases the robot
 """
@@ -130,6 +131,9 @@ class OpentronsClient:
     async def add_labware_definition(self, run_id: str, definition: Mapping[str, Any]) -> str:
         """Make a custom labware definition loadable in this run; returns its definitionUri."""
         return (await self._request("POST", f"/runs/{run_id}/labware_definitions", json={"data": dict(definition)}))["data"]["definitionUri"]
+
+    async def run(self, run_id: str) -> dict[str, Any]:
+        return (await self._request("GET", f"/runs/{run_id}"))["data"]
 
     async def stop_run(self, run_id: str) -> None:
         await self._request("POST", f"/runs/{run_id}/actions", json={"data": {"actionType": "stop"}})

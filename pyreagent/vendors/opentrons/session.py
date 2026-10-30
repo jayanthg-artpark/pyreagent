@@ -149,11 +149,29 @@ class OpentronsSession:
         run_id, self.run_id = self.run_id, None
         if run_id is None:
             return
-        for release in (self.client.stop_run, self.client.release_run):
+        if not self.stopped:  # park the gantry like the Opentrons App does; never after a stop or E-stop
             try:
-                await release(run_id)
-            except Exception as exc:  # already stopped, or the robot went away: nothing left to release
-                log.debug("releasing run %s: %s", run_id, exc)
+                await self.client.run_command(run_id, "home", {}, timeout_s=120)
+            except Exception as exc:
+                log.warning("homing before releasing run %s: %s", run_id, exc)
+        try:
+            await self.client.stop_run(run_id)
+        except Exception as exc:  # already stopped
+            log.debug("stopping run %s: %s", run_id, exc)
+        try:
+            await self._wait_stopped(run_id)
+            await self.client.release_run(run_id)
+        except Exception as exc:  # the robot went away: nothing left to release
+            log.warning("releasing run %s: %s", run_id, exc)
+
+    async def _wait_stopped(self, run_id: str, timeout_s: float = 30.0) -> None:
+        """The robot refuses to release a run until its stop has finished."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while (await self.client.run(run_id)).get("status") in ("stop-requested", "finishing", "running"):
+            if loop.time() > deadline:
+                raise TimeoutError(f"run {run_id} still stopping after {timeout_s:g}s")
+            await asyncio.sleep(self.client.poll_interval_s)
 
     async def stop(self) -> None:
         """Halt the robot: stops the run for every device on it."""

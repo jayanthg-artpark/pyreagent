@@ -58,6 +58,25 @@ async def test_connect_reads_pipettes_and_claims_the_robot():
     assert robot.current is None and robot.runs[info["driver"]["run_id"]]["status"] == "stopped"
 
 
+async def test_disconnect_homes_then_releases_once_the_stop_has_finished():
+    robot = FakeOpentronsRobot()
+    hub = await start(robot)
+    run_id = hub.describe_device("ot-1")["driver"]["run_id"]
+    await hub.stop()
+    assert robot.commands(run_id)[-1] == "home"  # the gantry is parked, not left over the deck
+    assert robot.runs[run_id]["status"] == "stopped" and robot.runs[run_id]["current"] is False
+
+
+async def test_disconnect_after_a_stop_does_not_home():
+    robot = FakeOpentronsRobot()
+    hub = await start(robot)
+    run_id = hub.describe_device("ot-1")["driver"]["run_id"]
+    await hub.invoke("ot-1", "stop", caller="human")
+    await hub.stop()
+    assert "home" not in robot.commands(run_id)
+    assert robot.current is None
+
+
 async def test_transfer_becomes_opentrons_commands():
     robot = FakeOpentronsRobot()
     hub = await start(robot)
@@ -160,7 +179,7 @@ async def test_stop_mid_transfer_faults_and_reset_starts_a_new_run():
     await hub.invoke("ot-1", "stop", caller="human")
     assert (await hub.jobs.wait(accepted.job.id, 5)).status == "cancelled"
     assert hub.device("ot-1").state is DeviceState.ERROR
-    assert robot.runs[first_run]["status"] == "stopped"
+    assert robot.runs[first_run]["status"] in ("stop-requested", "stopped")
     await hub.invoke("ot-1", "reset", {})
     assert hub.device("ot-1").state is DeviceState.IDLE
     assert robot.current != first_run and robot.runs[first_run]["current"] is False

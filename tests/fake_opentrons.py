@@ -146,7 +146,14 @@ class FakeOpentronsRobot:
             return httpx.Response(201, json={"data": {k: v for k, v in self.runs[run_id].items() if k != "commands"}})
         if len(parts) >= 2 and parts[0] == "runs" and parts[1] in self.runs:
             run = self.runs[parts[1]]
+            if method == "GET" and len(parts) == 2:
+                if run["status"] == "stop-requested":  # report it once, then the stop has finished
+                    run["status"] = "stopped"
+                    return httpx.Response(200, json={"data": {"id": run["id"], "status": "stop-requested", "current": run["current"]}})
+                return httpx.Response(200, json={"data": {k: v for k, v in run.items() if k != "commands"}})
             if method == "PATCH" and len(parts) == 2:
+                if run["status"] == "stop-requested":
+                    return _error(409, "RunNotIdle", "the run is still stopping")
                 if body["data"].get("current") is False:
                     run["current"] = False
                     if self.current == run["id"]:
@@ -154,7 +161,7 @@ class FakeOpentronsRobot:
                 return httpx.Response(200, json={"data": {"id": run["id"], "current": run["current"]}})
             if method == "POST" and parts[2:] == ["actions"]:
                 if body["data"]["actionType"] == "stop":
-                    run["status"] = "stopped"
+                    run["status"] = "stop-requested"
                 return httpx.Response(201, json={"data": {"id": f"action-{next(self._ids)}", **body["data"]}})
             if method == "POST" and parts[2:] == ["labware_definitions"]:
                 definition = body["data"]
@@ -172,7 +179,7 @@ class FakeOpentronsRobot:
         return _error(404, "NotFound", f"{method} {request.url.path}")
 
     async def _create_command(self, run: dict[str, Any], data: dict[str, Any], query: httpx.QueryParams) -> httpx.Response:
-        if run["status"] == "stopped" or not run["current"]:
+        if run["status"] in ("stopped", "stop-requested") or not run["current"]:
             return _error(409, "RunStopped", f"Run {run['id']} is not the current run")
         assert query.get("waitUntilComplete") == "true" and int(query["timeout"]) > 0
         self.sent.append({**data, "_run": run["id"]})
@@ -196,7 +203,7 @@ class FakeOpentronsRobot:
         def fail(kind: str, detail: str) -> dict[str, Any]:
             return {"status": "failed", "error": {"id": "err", "errorType": kind, "errorCode": "4000", "detail": detail}}
 
-        if run["status"] == "stopped":
+        if run["status"] in ("stopped", "stop-requested"):
             return fail("RunStoppedError", "The run was stopped.")
         if command_type in MOTION and not self.homed:
             return fail("MustHomeError", "Machine is not homed yet.")
