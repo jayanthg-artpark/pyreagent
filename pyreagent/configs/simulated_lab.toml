@@ -69,3 +69,15 @@ name = "washer-1"
 type = "plate_washer"
 driver = "simulated"
 driver_options = { buffers = { A = 2000.0, B = 1000.0 }, waste_capacity_ml = 4000.0, seconds_per_column = 0.1 }
+
+[[devices]]
+name = "magnet-1"
+type = "magnetic_separator"
+driver = "simulated"
+
+[[devices]]
+name = "heater-shaker-1"
+type = "shaker"
+driver = "simulated"
+driver_options = { heating = true, latch = true }
+options = { min_rpm = 200, max_rpm = 3000 }

@@ -1,7 +1,8 @@
 """Shakers. Capability interface: ``Shaker``. Drivers implement ``ShakerBackend``.
 
 Brands:
-    simulated/   in-memory shaker
+    simulated/   in-memory shaker (optionally a heater-shaker)
+    opentrons/   Opentrons Heater-Shaker Module, through the robot
 """
 
 from .backend import ShakerBackend

@@ -1,0 +1,21 @@
+# Opentrons Flex on the bench, for hardware testing.
+#   pyreagent serve examples/flex.toml
+# The deck below must match what is physically on the robot before anything moves.
+
+[server]
+name = "flex-bench"
+host = "127.0.0.1"
+port = 8000
+audit_log = "../logs/flex.audit.jsonl"
+
+[[devices]]
+name = "flex-1"
+type = "liquid_handler"
+driver = "opentrons"
+# Left: P1000 single-channel. Right: P50 8-channel. Trash bin in A3 (from the robot's deck configuration).
+driver_options = { host = "192.168.0.103", robot = "flex" }
+
+[devices.options.deck]
+"B2" = "opentrons_flex_96_tiprack_50ul"
+"C2" = { labware = "opentrons_24_tuberack_eppendorf_1.5ml_safelock_snapcap", initial_volume_ul = 0 }
+"D2" = { labware = "corning_96_wellplate_360ul_flat", initial_volume_ul = 0 }

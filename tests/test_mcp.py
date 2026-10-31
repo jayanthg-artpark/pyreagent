@@ -80,4 +80,4 @@ async def test_mcp_over_streamable_http(running_server: str):
         names = {t.name for t in (await client.list_tools()).tools}
         assert "shaker-1__shake" in names
         result = await client.call_tool("shaker-1__status", {})
-        assert payload(result)["result"] == {"shaking": False, "rpm": 0.0}
+        assert payload(result)["result"]["shaking"] is False and payload(result)["result"]["rpm"] == 0.0

@@ -116,7 +116,7 @@ async def test_interrupts_bypass_reservations(hub: DeviceHub):
     hub.reserve("shaker-1", caller="agent-a", ttl_s=60)
     await hub.invoke("shaker-1", "start_shaking", {"rpm": 500}, caller="agent-a")
     stopped = await hub.invoke("shaker-1", "stop_shaking", caller="agent-b")
-    assert stopped.result == {"shaking": False, "rpm": 0.0}
+    assert stopped.result["shaking"] is False and stopped.result["rpm"] == 0.0
 
 
 async def test_idempotency_key(hub: DeviceHub):

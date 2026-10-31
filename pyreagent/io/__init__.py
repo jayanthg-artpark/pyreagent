@@ -1,5 +1,6 @@
 """Transports: how bytes reach an instrument. Drivers pick one; protocols live in the drivers."""
 
+from .hid import HidTransport
 from .http import HttpBridge
 from .mock import MockTransport
 from .serial import SerialTransport
@@ -23,5 +24,5 @@ def line_transport(
     raise ValueError("driver needs a serial port (port=...) or a network address (host=..., tcp_port=...)")
 
 
-__all__ = ["HttpBridge", "MockTransport", "MockUsbTransport", "SerialTransport", "TcpTransport", "Transport", "UsbBulkTransport",
+__all__ = ["HidTransport", "HttpBridge", "MockTransport", "MockUsbTransport", "SerialTransport", "TcpTransport", "Transport", "UsbBulkTransport",
            "line_transport"]

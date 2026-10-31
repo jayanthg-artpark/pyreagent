@@ -58,12 +58,11 @@ async def test_connect_reads_pipettes_and_claims_the_robot():
     assert robot.current is None and robot.runs[info["driver"]["run_id"]]["status"] == "stopped"
 
 
-async def test_disconnect_homes_then_releases_once_the_stop_has_finished():
+async def test_disconnect_releases_once_the_stop_has_finished():
     robot = FakeOpentronsRobot()
     hub = await start(robot)
     run_id = hub.describe_device("ot-1")["driver"]["run_id"]
     await hub.stop()
-    assert robot.commands(run_id)[-1] == "home"  # the gantry is parked, not left over the deck
     assert robot.runs[run_id]["status"] == "stopped" and robot.runs[run_id]["current"] is False
 
 
@@ -73,7 +72,7 @@ async def test_disconnect_after_a_stop_does_not_home():
     run_id = hub.describe_device("ot-1")["driver"]["run_id"]
     await hub.invoke("ot-1", "stop", caller="human")
     await hub.stop()
-    assert "home" not in robot.commands(run_id)
+    assert "home" not in robot.commands(run_id) and robot.robot_homes == []
     assert robot.current is None
 
 
@@ -87,9 +86,9 @@ async def test_transfer_becomes_opentrons_commands():
     loads = [c["params"] for c in robot.sent if c["commandType"] == "loadLabware"]
     assert [(p["location"]["slotName"], p["loadName"], p["namespace"], p["version"]) for p in loads] == [
         ("1", "opentrons_96_tiprack_300ul", "opentrons", 1),
-        ("3", "nest_12_reservoir_15ml", "opentrons", 1),
-        ("4", "corning_96_wellplate_360ul_flat", "opentrons", 1),
-    ]  # each loaded once, on first use
+        ("3", "nest_12_reservoir_15ml", "opentrons", 3),
+        ("4", "corning_96_wellplate_360ul_flat", "opentrons", 5),
+    ]  # each loaded once, on first use, in the version Opentrons loads by default
     aspirate = next(c["params"] for c in robot.sent if c["commandType"] == "aspirate")
     assert aspirate["wellName"] == "A1" and aspirate["volume"] == 50
     assert aspirate["wellLocation"] == {"origin": "bottom", "offset": {"x": 0, "y": 0, "z": 1.0}}
@@ -160,6 +159,22 @@ async def test_redeclared_slot_moves_old_labware_off_deck():
     assert move["newLocation"] == "offDeck" and move["strategy"] == "manualMoveWithoutPause"
     assert [c["params"]["loadName"] for c in robot.sent if c["commandType"] == "loadLabware"][-1] == "nest_96_wellplate_200ul_flat"
     await hub.stop()
+
+
+async def test_robot_is_homed_after_the_run_is_released():
+    robot = FakeOpentronsRobot()
+    hub = await start(robot)
+    assert (await run_job(hub, "transfer", transfer_args()))["status"] == "succeeded"
+    assert robot.robot_homes == []
+    await hub.stop()
+    assert robot.current is None and robot.robot_homes == [None]  # released first, then homed
+
+
+async def test_homing_after_the_run_can_be_turned_off():
+    robot = FakeOpentronsRobot()
+    hub = await start(robot, home_after_run=False)
+    await hub.stop()
+    assert robot.current is None and robot.robot_homes == []
 
 
 async def test_slow_commands_are_polled():

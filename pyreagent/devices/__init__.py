@@ -31,6 +31,7 @@ DEVICE_TYPES: dict[str, str] = {
     "thermocycler": "Thermocycler",
     "qpcr": "Qpcr",
     "plate_washer": "PlateWasher",
+    "magnetic_separator": "MagneticSeparator",
 }
 
 

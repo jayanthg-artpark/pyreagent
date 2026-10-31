@@ -55,6 +55,14 @@ class SerialTransport(Transport):
             raise TimeoutError(f"no reply on {self.port} within {timeout_s:g}s (got {data!r})")
         return data
 
+    async def read_exactly(self, size: int, timeout_s: float) -> bytes:
+        port = self._port()
+        port.timeout = timeout_s
+        data: bytes = await asyncio.to_thread(port.read, size)
+        if len(data) < size:
+            raise TimeoutError(f"{len(data)} of {size} bytes from {self.port} within {timeout_s:g}s (got {data!r})")
+        return data
+
     async def discard_input(self) -> None:
         await asyncio.to_thread(self._port().reset_input_buffer)
 

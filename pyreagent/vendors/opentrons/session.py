@@ -6,6 +6,7 @@ on a module is loaded relative to the module's id in that run. A session is
 shared by every device configured with the same robot address. It creates the
 run when the first device connects and releases it when the last disconnects.
 
+When the last device disconnects, the run is released and the robot homed.
 If the run is stopped (``stop``, or the E-stop), the next device that connects
 or resets starts a fresh run; ``generation`` increases and every device reloads
 its own pipettes/modules into the new run before its next command.
@@ -34,8 +35,19 @@ ROBOTS: dict[str, dict[str, Any]] = {
 # Module kind -> robot -> anchor slot -> slots the module covers (labware on it is loaded via the module).
 MODULE_FOOTPRINTS: dict[str, dict[str, dict[str, list[str]]]] = {
     "thermocycler": {"ot2": {"7": ["7", "8", "10", "11"]}, "flex": {"B1": ["A1", "B1"]}},
+    "absorbance_reader": {"flex": {slot: [slot] for slot in ("A3", "B3", "C3", "D3")}},  # lid docks in column 4
 }
-MODULE_TYPES = {"thermocycler": "thermocyclerModuleType", "temperature": "temperatureModuleType"}
+MODULE_TYPES = {
+    "thermocycler": "thermocyclerModuleType",
+    "temperature": "temperatureModuleType",
+    "heater_shaker": "heaterShakerModuleType",
+    "absorbance_reader": "absorbanceReaderType",
+    "magnetic": "magneticModuleType",
+}
+# Modules that only some robots take.
+MODULE_ROBOTS = {"absorbance_reader": {"flex"}, "magnetic_block": {"flex"}, "magnetic": {"ot2"}}
+# Passive modules: no USB connection, so not in GET /modules; loaded into the run by model.
+PASSIVE_MODELS = {"magnetic_block": "magneticBlockV1"}
 
 
 @dataclass
@@ -91,6 +103,8 @@ class OpentronsSession:
         self.robot = robot
         self.client = OpentronsClient(host, port=port, headers=headers, transport=transport)
         self.command_timeout_s = 300.0
+        self.home_after_run = True
+        """Home every axis when the last device disconnects, so the robot is never left parked mid-deck."""
         self.run_id: str | None = None
         self.generation = 0
         self.stopped = False
@@ -100,6 +114,7 @@ class OpentronsSession:
         self.modules: dict[str, ModuleSlot] = {}
         self.auto = host == "auto" and transport is None
         self.robot_name: str | None = None
+        self._stored_offsets: list[dict[str, Any]] | None = None
         self._lock = asyncio.Lock()
 
     # -- lifecycle ------------------------------------------------------------------------------
@@ -115,7 +130,8 @@ class OpentronsSession:
         async with self._lock:
             self.users.discard(user)
             if not self.users:
-                await self._end_run()
+                # never move a robot that was stopped (or E-stopped): a human checks it first
+                await self._end_run(home=self.home_after_run and not self.stopped)
                 await self.client.close()
 
     async def _start_run(self) -> None:
@@ -139,39 +155,31 @@ class OpentronsSession:
             if self.robot == "flex":
                 self.deck_configuration = await self.client.deck_configuration()
             self.run_id = await self.client.create_run()
+            self._stored_offsets = None  # re-read per run: someone may have run Labware Position Check meanwhile
         except BaseException:
             await self.client.close()
             raise
         self.stopped = False
         self.generation += 1
 
-    async def _end_run(self) -> None:
+    async def _end_run(self, *, home: bool = False) -> None:
         run_id, self.run_id = self.run_id, None
         if run_id is None:
             return
-        if not self.stopped:  # park the gantry like the Opentrons App does; never after a stop or E-stop
-            try:
-                await self.client.run_command(run_id, "home", {}, timeout_s=120)
-            except Exception as exc:
-                log.warning("homing before releasing run %s: %s", run_id, exc)
         try:
             await self.client.stop_run(run_id)
-        except Exception as exc:  # already stopped
+        except Exception as exc:  # already stopped, or the robot went away
             log.debug("stopping run %s: %s", run_id, exc)
         try:
-            await self._wait_stopped(run_id)
+            await self.client.wait_for_run_end(run_id)
             await self.client.release_run(run_id)
-        except Exception as exc:  # the robot went away: nothing left to release
-            log.warning("releasing run %s: %s", run_id, exc)
-
-    async def _wait_stopped(self, run_id: str, timeout_s: float = 30.0) -> None:
-        """The robot refuses to release a run until its stop has finished."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_s
-        while (await self.client.run(run_id)).get("status") in ("stop-requested", "finishing", "running"):
-            if loop.time() > deadline:
-                raise TimeoutError(f"run {run_id} still stopping after {timeout_s:g}s")
-            await asyncio.sleep(self.client.poll_interval_s)
+        except Exception as exc:  # the robot stays busy for the Opentrons App until the run is released
+            log.warning("could not release run %s on %s: %s", run_id, self.client.base_url, exc)
+        if home:
+            try:
+                await self.client.home_robot()
+            except Exception as exc:  # e.g. the E-stop is engaged: a human has to home it
+                log.warning("could not home %s after the run: %s", self.client.base_url, exc)
 
     async def stop(self) -> None:
         """Halt the robot: stops the run for every device on it."""
@@ -188,6 +196,8 @@ class OpentronsSession:
 
     def register_module(self, kind: str, slot: str, *, serial: str | None = None) -> ModuleSlot:
         """Declare which module sits in ``slot`` (at device construction; does not touch the robot)."""
+        if self.robot not in MODULE_ROBOTS.get(kind, {self.robot}):
+            raise ValueError(f"a {kind} module does not fit the {self.robot}")
         footprints = MODULE_FOOTPRINTS.get(kind, {}).get(self.robot)
         if footprints is not None and slot not in footprints:
             raise ValueError(f"a {kind} module on {self.robot} must be in slot {', '.join(footprints)}")
@@ -238,12 +248,37 @@ class OpentronsSession:
         registration = self.modules[slot]
         if registration.module_id is not None and registration.generation == self.generation:
             return registration.module_id
-        module = await self._resolve(registration)
-        registration.serial = registration.serial or module.get("serialNumber")
-        registration.model = module["moduleModel"]
+        if registration.kind in PASSIVE_MODELS:
+            registration.model = PASSIVE_MODELS[registration.kind]
+        else:
+            module = await self._resolve(registration)
+            registration.serial = registration.serial or module.get("serialNumber")
+            registration.model = module["moduleModel"]
         result = await self.command("loadModule", {"model": registration.model, "location": {"slotName": slot}})
         registration.module_id, registration.generation = result["moduleId"], self.generation
         return registration.module_id
+
+    async def stored_offset(self, definition_uri: str, slot: str) -> dict[str, float] | None:
+        """The robot's stored Labware Position Check offset for this labware in ``slot``, if any.
+
+        Like the Opentrons App: an offset saved for this exact deck slot wins over the
+        labware's default (``anyLocation``) offset; the most recent of each kind counts.
+        On a module only the default offset applies.
+        """
+        if self._stored_offsets is None:
+            self._stored_offsets = await self.client.stored_labware_offsets()
+        on_deck = [{"kind": "onAddressableArea", "addressableAreaName": slot}] if self.module_covering(slot) is None else None
+        exact, default = [], []
+        for offset in self._stored_offsets:
+            if offset.get("definitionUri") != definition_uri:
+                continue
+            sequence = offset.get("locationSequence")
+            if sequence == "anyLocation":
+                default.append(offset)
+            elif on_deck is not None and [{k: c.get(k) for k in ("kind", "addressableAreaName")} for c in sequence or []] == on_deck:
+                exact.append(offset)
+        best = max(exact or default, key=lambda o: o.get("createdAt", ""), default=None)
+        return dict(best["vector"]) if best else None
 
     async def labware_location(self, slot: str) -> dict[str, Any]:
         """``loadLabware``/``moveLabware`` location for ``slot``: on the module there, or on the deck."""

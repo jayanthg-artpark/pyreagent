@@ -14,7 +14,8 @@ What it adds on top of plain pipetting, all from Opentrons' own command set:
   on 8-channels, column/row/single on the Flex 96-channel head
 - Flex: tip-presence checks after pickup/drop, liquid-level probing, the gripper
   (``moveLabware usingGripper``), the 50 µL low-volume mode (``configureForVolume``)
-- deck lights, labware on modules and on Flex staging slots, custom labware
+- deck lights, labware on modules (and on Flex Magnetic Blocks) and on Flex staging slots, custom labware
+- Labware Position Check offsets stored on the robot, applied as each labware is loaded
 
 Declare labware by its Opentrons load name (in the pyreagent catalog), map your
 own ids with ``load_names``, or pass Opentrons labware JSON in ``labware_definitions``.
@@ -28,9 +29,9 @@ from typing import Any, Literal, Mapping, Sequence
 
 import httpx
 
-from ....core.errors import InvalidArgument, NeedsAttention
+from ....core.errors import HardwareError, InvalidArgument, NeedsAttention
 from ....labware import DEFAULT_CATALOG, Labware
-from ....labware.opentrons_standard import OPENTRONS_LABWARE
+from ....labware.opentrons_standard import OPENTRONS_LABWARE, OPENTRONS_VERSIONS
 from ....vendors.opentrons.client import DEFAULT_PORT
 from ....vendors.opentrons.deck import parse_flex_deck, waste_chute_area
 from ....vendors.opentrons.labware import labware_from_definition, load_definition, load_spec
@@ -80,6 +81,9 @@ class OpentronsBackend(LiquidHandlerBackend):
         aspirate_height_mm: float = 1.0,
         dispense_height_mm: float = 1.0,
         verify_tips: bool = True,
+        use_stored_offsets: bool = True,
+        home_after_run: bool = True,
+        magnetic_blocks: Sequence[str] = (),
         command_timeout_s: float = 300.0,
         headers: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -98,11 +102,18 @@ class OpentronsBackend(LiquidHandlerBackend):
             pipettes: Per-mount overrides, e.g. ``{"left": {"tip_volumes_ul": [20], "default_flow_rate_ul_s": 7.5}}``.
             aspirate_height_mm, dispense_height_mm: Tip height above the well bottom.
             verify_tips: On a Flex, check with the tip sensors that pickups and drops really happened.
+            use_stored_offsets: Apply the Labware Position Check offsets saved on the robot (software 8.4+).
+            home_after_run: Home the gantry and pipettes when the robot is released (the last device on it disconnects).
+            magnetic_blocks: Flex slots holding a Magnetic Block; labware there is loaded onto the block.
             headers: Extra HTTP headers, e.g. an ``Authorization`` token if the robot requires one.
             transport: Inject an httpx transport (tests use a fake robot).
         """
         self.session = OpentronsSession.get(host=host, robot=robot, port=port, robot_name=robot_name, headers=headers, transport=transport)
         self.session.command_timeout_s = command_timeout_s
+        self.session.home_after_run = home_after_run
+        for slot in magnetic_blocks:
+            if slot not in self.session.modules:
+                self.session.register_module("magnetic_block", slot)
         self.robot = robot
         self._trash_option = trash
         self.trash = trash or ROBOTS[robot]["trash"]
@@ -118,6 +129,7 @@ class OpentronsBackend(LiquidHandlerBackend):
         self.aspirate_height_mm = aspirate_height_mm
         self.dispense_height_mm = dispense_height_mm
         self.verify_tips = verify_tips
+        self.use_stored_offsets = use_stored_offsets
         self.unsupported: list[str] = []
         self.has_gripper = False
         self._pipettes: dict[str, PipetteInfo] = {}
@@ -126,6 +138,8 @@ class OpentronsBackend(LiquidHandlerBackend):
         self._generation = -1
         self._loaded: dict[str, tuple[str, str, dict[str, Any]]] = {}  # slot -> (pyreagent id, robot labwareId, definition)
         self._layouts: dict[str, NozzleLayout] = {}
+        self._uris: dict[str, str] = {}  # slot -> definitionUri of the labware loaded there
+        self._offsets: dict[str, dict[str, float]] = {}  # slot -> stored offset applied to it
         self._tip_volume: dict[str, float] = {}
         self._contents: dict[str, float] = {}
         self._low_volume: dict[str, bool] = {}
@@ -161,7 +175,8 @@ class OpentronsBackend(LiquidHandlerBackend):
                     "the driver's load_names option, or add its definition JSON to labware_definitions.",
                 )
             spec = {"load_name": labware.id}
-        return {"loadName": spec["load_name"], "namespace": spec.get("namespace", "opentrons"), "version": int(spec.get("version", 1))}
+        version = spec.get("version", OPENTRONS_VERSIONS.get(spec["load_name"], 1))
+        return {"loadName": spec["load_name"], "namespace": spec.get("namespace", "opentrons"), "version": int(version)}
 
     def check_placement(self, slot: str, labware: Labware) -> None:
         self._load_identity(labware)
@@ -200,7 +215,7 @@ class OpentronsBackend(LiquidHandlerBackend):
                 self.slots = deck.slots
         for definition in self.custom_definitions:
             await session.client.add_labware_definition(session.run_id or "", definition)
-        self._ids, self._loaded, self._layouts = {}, {}, {}
+        self._ids, self._loaded, self._layouts, self._uris, self._offsets = {}, {}, {}, {}, {}
         self._tip_volume, self._contents, self._low_volume = {}, {}, {}
         for mount, model in self._models.items():
             result = await session.command("loadPipette", {"pipetteName": model, "mount": mount})
@@ -249,9 +264,36 @@ class OpentronsBackend(LiquidHandlerBackend):
             await self._command("moveLabware", {"labwareId": loaded[1], "newLocation": "offDeck", "strategy": "manualMoveWithoutPause"})
             del self._loaded[slot]
         location = await self.session.labware_location(slot)
-        result = await self._command("loadLabware", {"location": location, **self._load_identity(labware), "displayName": labware.id})
+        identity = self._load_identity(labware)
+        try:
+            result = await self._load(slot, location, identity, labware)
+        except HardwareError as exc:
+            # Older robot software may not have the default version yet; version 1 always exists.
+            if exc.details.get("error_type") != "LabwareDefinitionDoesNotExistError" or identity["version"] == 1:
+                raise
+            log.warning("%s v%d is not on this robot; loading v1", identity["loadName"], identity["version"])
+            result = await self._load(slot, location, {**identity, "version": 1}, labware)
         self._loaded[slot] = (labware.id, result["labwareId"], result.get("definition") or {})
         return result["labwareId"], self._loaded[slot][2]
+
+    async def _load(self, slot: str, location: dict[str, Any], identity: dict[str, Any], labware: Labware) -> dict[str, Any]:
+        uri = f"{identity['namespace']}/{identity['loadName']}/{identity['version']}"
+        await self._apply_offset(uri, slot)
+        result = await self._command("loadLabware", {"location": location, **identity, "displayName": labware.id})
+        self._uris[slot] = uri
+        return result
+
+    async def _apply_offset(self, uri: str, slot: str) -> None:
+        """Give the run the robot's stored offset for ``uri`` in ``slot``; the engine applies it on load or move there."""
+        self._offsets.pop(slot, None)
+        vector = await self.session.stored_offset(uri, slot) if self.use_stored_offsets else None
+        if vector is None:
+            return
+        module = self.session.module_covering(slot)
+        where = {"slotName": slot, **({"moduleModel": module.model} if module else {})}
+        await self.session.client.add_labware_offset(self.session.run_id or "", {"definitionUri": uri, "location": where, "vector": vector})
+        self._offsets[slot] = vector
+        log.info("%s in %s: stored offset %s", uri, slot, vector)
 
     # -- pipette helpers -----------------------------------------------------------------------
 
@@ -373,9 +415,13 @@ class OpentronsBackend(LiquidHandlerBackend):
 
     async def move_labware(self, *, labware: Labware, from_slot: str, to_slot: str, use_gripper: bool) -> None:
         labware_id, _ = await self._labware(from_slot, labware)
-        await self._command("moveLabware", {"labwareId": labware_id, "newLocation": await self.session.labware_location(to_slot),
+        new_location = await self.session.labware_location(to_slot)
+        await self._apply_offset(self._uris[from_slot], to_slot)
+        await self._command("moveLabware", {"labwareId": labware_id, "newLocation": new_location,
                                             "strategy": "usingGripper" if use_gripper else "manualMoveWithoutPause"})
         self._loaded[to_slot] = self._loaded.pop(from_slot)
+        self._uris[to_slot] = self._uris.pop(from_slot)
+        self._offsets.pop(from_slot, None)
 
     async def probe_liquid_heights(self, *, pipette: PipetteInfo, slot: str, labware: Labware, wells: list[str]) -> dict[str, float | None]:
         """Liquid surface above each well's bottom, mm: the probe's deck Z minus (well top Z - well depth)."""
@@ -418,4 +464,5 @@ class OpentronsBackend(LiquidHandlerBackend):
             "gripper": self.has_gripper,
             "trash": self.trash,
             "custom_labware": [d["parameters"]["loadName"] for d in self.custom_definitions],
+            "labware_offsets": dict(self._offsets),
         }

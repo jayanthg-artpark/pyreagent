@@ -45,6 +45,14 @@ class TcpTransport(Transport):
         except asyncio.IncompleteReadError as exc:
             raise ConnectionError(f"{self.host}:{self.port} closed the connection") from exc
 
+    async def read_exactly(self, size: int, timeout_s: float) -> bytes:
+        if self._reader is None:
+            raise ConnectionError(f"not connected to {self.host}:{self.port}")
+        try:
+            return await asyncio.wait_for(self._reader.readexactly(size), timeout=timeout_s)
+        except asyncio.IncompleteReadError as exc:
+            raise ConnectionError(f"{self.host}:{self.port} closed the connection") from exc
+
     async def discard_input(self) -> None:
         reader = self._reader
         if reader is None:
