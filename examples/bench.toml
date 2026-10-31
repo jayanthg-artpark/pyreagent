@@ -113,3 +113,11 @@ options = { min_c = 4, max_c = 95 }
 # [devices.options.deck]
 # "tips.1" = "tecan_diti_200ul_liha"
 # "plates.1" = { labware = "tecan_microplate_96_well", initial_volume_ul = 200 }
+
+# --- Tecan HydroFlex plate washer over USB (pip install 'pyreagent[usb]') ---------------------
+# Runs the wash programs stored on the washer (list_programs / run_program); primes by time.
+# [[devices]]
+# name = "washer-1"
+# type = "plate_washer"
+# driver = "tecan"                            # pyreagent/devices/plate_washer/tecan/
+# driver_options = { channels = { wash = 1, water = 2 } }   # buffer name -> supply channel 1-4

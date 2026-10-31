@@ -15,34 +15,20 @@ from dataclasses import dataclass
 from statistics import fmean
 from typing import Literal
 
+from ....vendors.tecan.text import CR, ETX, STX, busy_ms, encode  # noqa: F401  (Tecan framing, shared with the HydroFlex)
+
 VENDOR_ID = 0x0C47
 PRODUCT_ID = 0x8007
 
-STX, ETX, CR, ESC = 0x02, 0x03, 0x0D, 0x1B
+ESC = 0x1B
 STATUS_FRAME_SIZE = 31  # ESC-led status frames seen during scans; content unknown, skipped whole
 TERMINAL = frozenset({"ST", "+", "-"})
 
 _BIN_HEADER = re.compile(r"(\d+),BIN:")
-_BUSY = re.compile(r"\+?BY#T(\d+)")
 _BUSY_STATUS = re.compile(r"BY(#.\d+|%\d+|\$.*)?")
-
 
 class CalibrationError(ValueError):
     """The calibration and data packets cannot produce a value (zero denominators)."""
-
-
-def encode(text: str) -> bytes:
-    payload = text.encode("ascii")
-    checksum = 0x01
-    for byte in payload:
-        checksum ^= byte
-    return bytes([STX]) + payload + bytes([ETX, 0, 0, len(payload) & 0xFF, checksum, CR])
-
-
-def busy_ms(text: str) -> int | None:
-    """Milliseconds the device announced in a timed-busy frame (``BY#T5000``, ``+BY#T0``), else None."""
-    match = _BUSY.fullmatch(text)
-    return int(match.group(1)) if match else None
 
 
 def is_terminal(text: str) -> bool:

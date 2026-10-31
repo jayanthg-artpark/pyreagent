@@ -122,7 +122,7 @@ Each device type has its own folder, with one subfolder per brand. Every type al
 | 🤖 **Liquid handler** | `transfer` · `aspirate` · `dispense` · `blow_out` · `touch_tip` · `mix` · `pick_up_tip` (incl. partial tips) · `drop_tip` · `return_tip` · `move_labware` · `probe_liquid_heights` · `load_labware` · `get_deck` · `move_to` · `set_lights` · `home` · `stop` | simulated · Opentrons OT-2 / Flex · Hamilton STAR / STARlet · Tecan Freedom EVO |
 | 🧬 **Thermocycler** | `run_profile` · `set_block_temperature` · `open_lid` · `close_lid` · `lift_plate` · `status` · `deactivate` | simulated · Opentrons Thermocycler (via robot or USB) |
 | 📈 **qPCR** | `run_qpcr` (curves + Ct estimate), plus everything a thermocycler does | simulated |
-| 🚿 **Plate washer** | `wash` · `dispense` · `prime` · `status` · `stop` | simulated |
+| 🚿 **Plate washer** | `wash` · `dispense` · `prime` · `list_programs` · `get_program` · `run_program` · `move_plate_out` · `move_plate_in` · `status` · `stop` | simulated · Tecan HydroFlex |
 | 🧲 **Magnetic separator** | `engage` · `disengage` · `status` | simulated · Opentrons Magnetic Module GEN1/GEN2 (via robot) |
 
 Every device also has `reset`, which clears an error state. Drivers declare optional hardware features (for
@@ -173,8 +173,9 @@ pyreagent/
       opentrons/             Thermocycler Module: robot.py (through the robot) · usb.py (direct, GEN1/GEN2)
     qpcr/                    extends thermocycler; adds fluorescence and a Ct estimate (analysis.py)
       simulated/
-    plate_washer/            wash / dispense / prime, buffer and waste checks
+    plate_washer/            wash / dispense / prime, stored programs, plate transport, buffer and waste checks
       simulated/
+      tecan/                 HydroFlex over USB: stored programs, priming, plate transport
     magnetic_separator/      engage / disengage magnets under a plate (bead clean-ups)
       simulated/
       opentrons/             Magnetic Module GEN1/GEN2, through the OT-2
@@ -504,6 +505,7 @@ Then register the type in `devices/DEVICE_TYPES`.
 | `liquid_handler/hamilton` (STAR / STARlet, firmware over USB) | 🧪 written from PyLabRobot's reverse-engineered STAR backend. Tested against a fake firmware: tip handling, aspirate, dispense, CO-RE 96 and iSWAP commands match the strings PyLabRobot's tests expect. **Not yet run on a physical STAR.** |
 | `liquid_handler/tecan` (Freedom EVO, firmware over USB) | 🧪 written the same way and tested against a fake firmware with PyLabRobot's expected strings. Constants PyLabRobot marks unverified are driver options. **Not yet run on a physical EVO.** |
 | `plate_reader/bmg_labtech`, `biotek`, `molecular_devices`, `tecan`, `byonoy` | 🧪 written from protocol descriptions of PyLabRobot's drivers and tested against protocol fakes, byte-exact where recorded traffic exists. **Not yet run on a physical reader.** |
+| `plate_washer/tecan` (HydroFlex, USB) | 🧪 the protocol was confirmed on a HydroFlex; tested against a fake with frame bytes captured from it. Runs programs stored on the washer, primes by time and moves the plate transport. Volumes and cycles can't be set per call, and `stop` can't interrupt a running program. **This driver's own code is not yet run on the washer.** |
 | `thermocycler/opentrons` (robot and USB, GEN1/GEN2) | 🧪 built from Opentrons' module commands and firmware driver, and tested against fakes. **Not yet run on a physical module.** |
 | `temperature_controller/opentrons` (robot and USB) | 🧪 as above. **Not yet run on a physical module.** |
 | `shaker/opentrons`, `plate_reader/opentrons`, `magnetic_separator/opentrons` (Heater-Shaker, Absorbance Plate Reader, Magnetic Module, through the robot) | 🧪 built from Opentrons' module commands; every command is validated against the official schema and tested against a fake robot-server that enforces the engine's rules. **Not yet run on a physical module.** |

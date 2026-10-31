@@ -41,7 +41,8 @@ class SimulatedPlateWasherBackend(PlateWasherBackend):
     async def _tick(self) -> None:
         await asyncio.sleep(self.seconds_per_column)
 
-    async def prime(self, *, buffer: str, volume_ml: float) -> None:
+    async def prime(self, *, buffer: str, volume_ml: float | None, duration_s: float | None) -> None:
+        assert volume_ml is not None  # prime_by = "volume"
         await self._tick()
         self.levels[buffer] -= volume_ml
         self.waste_ml += volume_ml

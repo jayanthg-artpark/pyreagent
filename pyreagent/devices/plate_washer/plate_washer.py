@@ -9,10 +9,10 @@ from pydantic import Field
 
 from ...core.capability import Within, capability
 from ...core.device import Device
-from ...core.errors import InvalidArgument, NeedsAttention
+from ...core.errors import InvalidArgument, NeedsAttention, NotSupported
 from ...labware import DEFAULT_CATALOG, Labware, LabwareCatalog
 from .backend import PlateWasherBackend
-from .models import PlateWasherStatus, WasherRun
+from .models import PlateWasherStatus, ProgramRun, WasherProgram, WasherRun
 
 Plate = Annotated[str, Field(description="Labware id of the plate on the carrier, from GET /labware.")]
 Buffer = Annotated[str, Field(description="Buffer bottle, from limits.buffers.")]
@@ -20,6 +20,10 @@ Columns = Annotated[list[int] | None, Field(description="1-based plate columns t
 DispenseUl = Annotated[
     float, Field(gt=0, description="Buffer per well, µL, up to limits.max_dispense_ul and the well's capacity."), Within(high="max_dispense_ul")
 ]
+Program = Annotated[int | str, Field(description="Program number or name, from list_programs.")]
+
+_FEATURE = {"wash": "wash", "dispense": "dispense", "list_programs": "stored_programs", "get_program": "stored_programs",
+            "run_program": "stored_programs", "move_plate_out": "plate_transport", "move_plate_in": "plate_transport"}
 
 
 class PlateWasher(Device[PlateWasherBackend]):
@@ -35,7 +39,13 @@ class PlateWasher(Device[PlateWasherBackend]):
 
     def limits(self) -> dict[str, Any]:
         return {"buffers": list(self.backend.buffers), "max_dispense_ul": self.backend.max_dispense_ul,
-                "plate_formats": list(self.backend.plate_formats)}
+                "plate_formats": list(self.backend.plate_formats), "features": sorted(self.backend.features),
+                "prime_by": self.backend.prime_by}
+
+    def _require(self, feature: str) -> None:
+        if feature not in self.backend.features:
+            raise NotSupported(f"{type(self.backend).__name__} does not support {feature}.",
+                               details={"features": sorted(self.backend.features)})
 
     def _plate(self, plate_id: str) -> Labware:
         plate = self.labware.get(plate_id, kind="plate")
@@ -44,6 +54,15 @@ class PlateWasher(Device[PlateWasherBackend]):
         return plate
 
     def validate_arguments(self, capability_name: str, values: dict[str, Any]) -> None:
+        if capability_name in _FEATURE:
+            self._require(_FEATURE[capability_name])
+        if capability_name == "prime":
+            unit = "duration_s" if self.backend.prime_by == "time" else "volume_ml"
+            other = "volume_ml" if unit == "duration_s" else "duration_s"
+            if values.get(other) is not None:
+                raise InvalidArgument(f"This washer primes by {'time' if unit == 'duration_s' else 'volume'}; give {unit}, not {other}.")
+            if unit == "duration_s" and values.get("duration_s") is None:
+                raise InvalidArgument("This washer primes by time; give duration_s.")
         if "buffer" in values and values["buffer"] not in self.backend.buffers:
             raise InvalidArgument(f"No buffer {values['buffer']!r}.", details={"buffers": self.backend.buffers})
         if "plate" in values:
@@ -104,15 +123,71 @@ class PlateWasher(Device[PlateWasherBackend]):
 
     @capability(long_running=True)
     async def prime(
-        self, buffer: Buffer, volume_ml: Annotated[float, Field(gt=0, le=500, description="Buffer to push through, mL.")] = 50
+        self,
+        buffer: Buffer,
+        volume_ml: Annotated[float | None, Field(gt=0, le=500, description="Buffer to push through, mL (washers with prime_by "
+                                                 "'volume'; default 50).")] = None,
+        duration_s: Annotated[float | None, Field(gt=0, le=600, description="How long to pump, seconds (washers with prime_by "
+                                                  "'time').")] = None,
     ) -> WasherRun:
-        """Fill the washer lines with a buffer. Do this when changing buffers or after the washer sat idle."""
-        await self._check_supplies(buffer, volume_ml)
+        """Fill the washer lines with a buffer. Do this when changing buffers or after the washer sat idle.
+
+        Only prime a buffer that has a bottle connected. limits.prime_by says whether this washer takes
+        volume_ml or duration_s.
+        """
+        if self.backend.prime_by == "volume" and volume_ml is None:
+            volume_ml = 50.0
+        await self._check_supplies(buffer, volume_ml or 0.0)
         loop = asyncio.get_running_loop()
         started = loop.time()
-        await self.backend.prime(buffer=buffer, volume_ml=volume_ml)
+        await self.backend.prime(buffer=buffer, volume_ml=volume_ml, duration_s=duration_s)
         return WasherRun(operation="prime", plate=None, buffer=buffer, columns=[], cycles=1, buffer_used_ml=volume_ml,
                          duration_s=round(loop.time() - started, 3))
+
+    @capability(read_only=True)
+    async def list_programs(self) -> dict[int, str]:
+        """Wash programs stored on the washer, by number."""
+        return await self.backend.list_programs()
+
+    async def _program_number(self, program: int | str) -> tuple[int, str]:
+        programs = await self.backend.list_programs()
+        if isinstance(program, int) or str(program).isdigit():
+            number = int(program)
+            if number in programs:
+                return number, programs[number]
+        else:
+            matches = [n for n, name in programs.items() if name.lower() == str(program).lower()]
+            if len(matches) == 1:
+                return matches[0], programs[matches[0]]
+        raise InvalidArgument(f"No program {program!r} on the washer.", details={"programs": programs})
+
+    @capability(read_only=True)
+    async def get_program(self, program: Program) -> WasherProgram:
+        """A stored program's plate definition and steps; check them before running it."""
+        number, _ = await self._program_number(program)
+        return await self.backend.get_program(number)
+
+    @capability(long_running=True)
+    async def run_program(self, program: Program) -> ProgramRun:
+        """Run a stored wash program on the plate in the washer, to the end. Runs as a job.
+
+        The program uses the buffer channels and plate definition it was written with (see get_program).
+        """
+        number, name = await self._program_number(program)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        phases = await self.backend.run_program(number, self.report_progress)
+        return ProgramRun(program=number, name=name, phases=phases, duration_s=round(loop.time() - started, 3))
+
+    @capability(long_running=True)
+    async def move_plate_out(self) -> None:
+        """Move the plate carrier out so a plate can be put in or taken out. Keep hands clear while it moves."""
+        await self.backend.move_plate_out()
+
+    @capability(long_running=True)
+    async def move_plate_in(self) -> None:
+        """Move the plate carrier back into the washer."""
+        await self.backend.move_plate_in()
 
     @capability(read_only=True)
     async def status(self) -> PlateWasherStatus:
@@ -127,5 +202,5 @@ class PlateWasher(Device[PlateWasherBackend]):
         return await self.backend.status()
 
     async def on_cancel(self, capability_name: str) -> None:
-        if capability_name in ("wash", "dispense", "prime"):
+        if capability_name in ("wash", "dispense", "prime", "run_program", "move_plate_out", "move_plate_in"):
             await self.backend.stop()
