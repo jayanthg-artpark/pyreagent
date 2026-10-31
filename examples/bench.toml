@@ -121,3 +121,17 @@ options = { min_c = 4, max_c = 95 }
 # type = "plate_washer"
 # driver = "tecan"                            # pyreagent/devices/plate_washer/tecan/
 # driver_options = { channels = { wash = 1, water = 2 } }   # buffer name -> supply channel 1-4
+
+# --- Avay Bioscience LiquidXpert Lite over USB serial (pip install 'pyreagent[serial]') ---------
+# Calibrated (FlowXpert's own positions): Nunc 165305 / Tarsons 941196 / Nunc 442404 plates on slots 1-2,
+# the Tarsons T524090 reservoir on slot 2, a 96-tip rack (300 µL) on slot 3. Other labware: teach it and add a calibration.
+# [[devices]]
+# name = "lxp-1"
+# type = "liquid_handler"
+# driver = "avay"                             # pyreagent/devices/liquid_handler/avay/
+# driver_options = { port = "COM4" }
+# # driver_options = { port = "COM4", calibrations = { "1" = { my_plate = { x = 70.5, y = 130.3, bottom_z = 98.3, top_z = 87.3 } } } }
+# [devices.options.deck]
+# "1" = { labware = "nunc_165305_96_wellplate_300ul", initial_volume_ul = 0 }
+# "2" = { labware = "tarsons_t524090_2_reservoir_60ml", initial_volume_ul = 50000 }
+# "3" = "opentrons_96_tiprack_300ul"
